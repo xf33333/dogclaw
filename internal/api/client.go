@@ -538,8 +538,8 @@ func (c *Client) doOpenAIRequest(ctx context.Context, endpoint string, body []by
 	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
 
 	// OpenRouter specific headers
-	//httpReq.Header.Set("HTTP-Referer", "https://dogclaw.ai")
-	//httpReq.Header.Set("X-Title", "DogClaw")
+	httpReq.Header.Set("HTTP-Referer", "https://github.com/xf33333/dogclaw")
+	httpReq.Header.Set("X-Title", "DogClaw")
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
