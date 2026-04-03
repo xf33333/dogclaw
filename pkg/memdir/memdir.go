@@ -1,0 +1,315 @@
+package memdir
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+const (
+	MaxEntrypointLines = 200
+	MaxEntrypointBytes = 25000
+	EntrypointName     = "MEMORY.md"
+	AutoMemDisplayName = "auto memory"
+)
+
+// EntrypointTruncation holds truncated memory content
+type EntrypointTruncation struct {
+	Content          string
+	LineCount        int
+	ByteCount        int
+	WasLineTruncated bool
+	WasByteTruncated bool
+}
+
+// TruncateEntrypointContent truncates MEMORY.md content to line and byte caps
+func TruncateEntrypointContent(raw string) EntrypointTruncation {
+	trimmed := strings.TrimSpace(raw)
+	contentLines := strings.Split(trimmed, "\n")
+	lineCount := len(contentLines)
+	byteCount := len(trimmed)
+
+	wasLineTruncated := lineCount > MaxEntrypointLines
+	wasByteTruncated := byteCount > MaxEntrypointBytes
+
+	if !wasLineTruncated && !wasByteTruncated {
+		return EntrypointTruncation{
+			Content:          trimmed,
+			LineCount:        lineCount,
+			ByteCount:        byteCount,
+			WasLineTruncated: false,
+			WasByteTruncated: false,
+		}
+	}
+
+	var truncated string
+	if wasLineTruncated {
+		lines := contentLines[:MaxEntrypointLines]
+		truncated = strings.Join(lines, "\n")
+	} else {
+		truncated = trimmed
+	}
+
+	if len(truncated) > MaxEntrypointBytes {
+		cutAt := strings.LastIndex(truncated[:MaxEntrypointBytes], "\n")
+		if cutAt > 0 {
+			truncated = truncated[:cutAt]
+		} else {
+			truncated = truncated[:MaxEntrypointBytes]
+		}
+	}
+
+	reason := ""
+	if wasByteTruncated && !wasLineTruncated {
+		reason = fmt.Sprintf("%d bytes (limit: %d) — index entries are too long", byteCount, MaxEntrypointBytes)
+	} else if wasLineTruncated && !wasByteTruncated {
+		reason = fmt.Sprintf("%d lines (limit: %d)", lineCount, MaxEntrypointLines)
+	} else {
+		reason = fmt.Sprintf("%d lines and %d bytes", lineCount, byteCount)
+	}
+
+	warning := fmt.Sprintf("\n\n> WARNING: %s is %s. Only part of it was loaded. Keep index entries to one line under ~200 chars; move detail into topic files.", EntrypointName, reason)
+
+	return EntrypointTruncation{
+		Content:          truncated + warning,
+		LineCount:        lineCount,
+		ByteCount:        byteCount,
+		WasLineTruncated: wasLineTruncated,
+		WasByteTruncated: wasByteTruncated,
+	}
+}
+
+// EnsureMemoryDirExists ensures a memory directory exists (idempotent)
+func EnsureMemoryDirExists(memoryDir string) error {
+	return os.MkdirAll(memoryDir, 0755)
+}
+
+// BuildMemoryLines builds the typed-memory behavioral instructions
+func BuildMemoryLines(displayName, memoryDir string, extraGuidelines []string, skipIndex bool) []string {
+	var howToSave []string
+
+	if skipIndex {
+		howToSave = []string{
+			"## How to save memories",
+			"",
+			"Write each memory to its own file (e.g., `user_role.md`, `feedback_testing.md`) using this frontmatter format:",
+			"",
+		}
+		howToSave = append(howToSave, MemoryFrontmatterExample()...)
+		howToSave = append(howToSave, []string{
+			"",
+			"- Keep the name, description, and type fields in memory files up-to-date with the content",
+			"- Organize memory semantically by topic, not chronologically",
+			"- Update or remove memories that turn out to be wrong or outdated",
+			"- Do not write duplicate memories. First check if there is an existing memory you can update before writing a new one.",
+		}...)
+	} else {
+		howToSave = []string{
+			"## How to save memories",
+			"",
+			"Saving a memory is a two-step process:",
+			"",
+			"**Step 1** — write the memory to its own file (e.g., `user_role.md`, `feedback_testing.md`) using this frontmatter format:",
+			"",
+		}
+		howToSave = append(howToSave, MemoryFrontmatterExample()...)
+		howToSave = append(howToSave, []string{
+			"",
+			fmt.Sprintf("**Step 2** — add a pointer to that file in `%s`. `%s` is an index, not a memory — each entry should be one line, under ~150 characters: `- [Title](file.md) — one-line hook`. It has no frontmatter. Never write memory content directly into `%s`.", EntrypointName, EntrypointName, EntrypointName),
+			"",
+			fmt.Sprintf("- `%s` is always loaded into your conversation context — lines after %d will be truncated, so keep the index concise", EntrypointName, MaxEntrypointLines),
+			"- Keep the name, description, and type fields in memory files up-to-date with the content",
+			"- Organize memory semantically by topic, not chronologically",
+			"- Update or remove memories that turn out to be wrong or outdated",
+			"- Do not write duplicate memories. First check if there is an existing memory you can update before writing a new one.",
+		}...)
+	}
+
+	lines := []string{
+		fmt.Sprintf("# %s", displayName),
+		"",
+		fmt.Sprintf("You have a persistent, file-based memory system at `%s`. %s", memoryDir, DirExistsGuidance()),
+		"",
+		"You should build up this memory system over time so that future conversations can have a complete picture of who the user is, how they'd like to collaborate with you, what behaviors to avoid or repeat, and the context behind the work the user gives you.",
+		"",
+		"If the user explicitly asks you to remember something, save it immediately as whichever type fits best. If they ask you to forget something, find and remove the relevant entry.",
+		"",
+	}
+
+	lines = append(lines, TypesSectionIndividual()...)
+	lines = append(lines, WhatNotToSaveSection()...)
+	lines = append(lines, "")
+	lines = append(lines, howToSave...)
+	lines = append(lines, "")
+	lines = append(lines, WhenToAccessSection()...)
+	lines = append(lines, "")
+	lines = append(lines, TrustingRecallSection()...)
+	lines = append(lines, "")
+	lines = append(lines, MemoryAndOtherPersistenceSection()...)
+	lines = append(lines, "")
+
+	if len(extraGuidelines) > 0 {
+		lines = append(lines, extraGuidelines...)
+		lines = append(lines, "")
+	}
+
+	lines = append(lines, BuildSearchingPastContextSection(memoryDir)...)
+
+	return lines
+}
+
+// BuildMemoryPrompt builds the typed-memory prompt with MEMORY.md content included
+func BuildMemoryPrompt(displayName, memoryDir string, extraGuidelines []string) string {
+	entrypoint := filepath.Join(memoryDir, EntrypointName)
+
+	lines := BuildMemoryLines(displayName, memoryDir, extraGuidelines, false)
+
+	if content, err := os.ReadFile(entrypoint); err == nil {
+		entrypointContent := string(content)
+		if strings.TrimSpace(entrypointContent) != "" {
+			t := TruncateEntrypointContent(entrypointContent)
+			lines = append(lines, fmt.Sprintf("## %s", EntrypointName), "", t.Content)
+		} else {
+			lines = append(lines, fmt.Sprintf("## %s", EntrypointName), "",
+				fmt.Sprintf("Your %s is currently empty. When you save new memories, they will appear here.", EntrypointName))
+		}
+	} else {
+		lines = append(lines, fmt.Sprintf("## %s", EntrypointName), "",
+			fmt.Sprintf("Your %s is currently empty. When you save new memories, they will appear here.", EntrypointName))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// DirExistsGuidance returns the guidance text for existing directories
+func DirExistsGuidance() string {
+	return "This directory already exists — write to it directly with the Write tool (do not run mkdir or check for its existence)."
+}
+
+// MemoryAndOtherPersistenceSection returns section about memory vs other persistence
+func MemoryAndOtherPersistenceSection() []string {
+	return []string{
+		"## Memory and other forms of persistence",
+		"Memory is one of several persistence mechanisms available to you as you assist the user in a given conversation. The distinction is often that memory can be recalled in future conversations and should not be used for persisting information that is only useful within the scope of the current conversation.",
+		"- When to use or update a plan instead of memory: If you are about to start a non-trivial implementation task and would like to reach alignment with the user on your approach you should use a Plan rather than saving this information to memory.",
+		"- When to use or update tasks instead of memory: When you need to break your work in current conversation into discrete steps or keep track of your progress use tasks instead of saving to memory.",
+	}
+}
+
+// BuildSearchingPastContextSection builds the "Searching past context" section
+func BuildSearchingPastContextSection(autoMemDir string) []string {
+	memSearch := fmt.Sprintf("grep -rn \"<search term>\" %s --include=\"*.md\"", autoMemDir)
+	transcriptSearch := fmt.Sprintf("grep -rn \"<search term>\" <projectDir>/ --include=\"*.jsonl\"", autoMemDir)
+
+	return []string{
+		"## Searching past context",
+		"",
+		"When looking for past context:",
+		"1. Search topic files in your memory directory:",
+		"```",
+		memSearch,
+		"```",
+		"2. Session transcript logs (last resort — large files, slow):",
+		"```",
+		transcriptSearch,
+		"```",
+		"Use narrow search terms (error messages, file paths, function names) rather than broad keywords.",
+		"",
+	}
+}
+
+// MemoryFrontmatterExample returns the frontmatter format example
+func MemoryFrontmatterExample() []string {
+	return []string{
+		"```markdown",
+		"---",
+		"name: {{memory name}}",
+		"description: {{one-line description}}",
+		"type: {{user, feedback, project, reference}}",
+		"---",
+		"",
+		"{{memory content}}",
+		"```",
+	}
+}
+
+// TypesSectionIndividual returns the memory types section
+func TypesSectionIndividual() []string {
+	return []string{
+		"## Types of memory",
+		"",
+		"There are several discrete types of memory that you can store in your memory system:",
+		"",
+		"<types>",
+		"<type>",
+		"    <name>user</name>",
+		"    <description>Contain information about the user's role, goals, responsibilities, and knowledge.</description>",
+		"    <when_to_save>When you learn any details about the user's role, preferences, responsibilities, or knowledge</when_to_save>",
+		"    <how_to_use>When your work should be informed by the user's profile or perspective.</how_to_use>",
+		"</type>",
+		"<type>",
+		"    <name>feedback</name>",
+		"    <description>Guidance the user has given you about how to approach work — both what to avoid and what to keep doing.</description>",
+		"    <when_to_save>Any time the user corrects your approach OR confirms a non-obvious approach worked.</when_to_save>",
+		"    <how_to_use>Let these memories guide your behavior so that the user does not need to offer the same guidance twice.</how_to_use>",
+		"</type>",
+		"<type>",
+		"    <name>project</name>",
+		"    <description>Information about ongoing work, goals, initiatives, bugs, or incidents within the project.</description>",
+		"    <when_to_save>When you learn who is doing what, why, or by when.</when_to_save>",
+		"    <how_to_use>Use these memories to understand the context behind the user's request.</how_to_use>",
+		"</type>",
+		"<type>",
+		"    <name>reference</name>",
+		"    <description>Stores pointers to where information can be found in external systems.</description>",
+		"    <when_to_save>When you learn about resources in external systems and their purpose.</when_to_save>",
+		"    <how_to_use>When the user references an external system or information.</how_to_use>",
+		"</type>",
+		"</types>",
+		"",
+	}
+}
+
+// WhatNotToSaveSection returns what NOT to save
+func WhatNotToSaveSection() []string {
+	return []string{
+		"## What NOT to save in memory",
+		"",
+		"- Code patterns, conventions, architecture, file paths, or project structure — these can be derived by reading the current project state.",
+		"- Git history, recent changes, or who-changed-what — git log / git blame are authoritative.",
+		"- Debugging solutions or fix recipes — the fix is in the code; the commit message has the context.",
+		"- Anything already documented in AGENT.md files.",
+		"- Ephemeral task details: in-progress work, temporary state, current conversation context.",
+		"",
+		"These exclusions apply even when the user explicitly asks you to save.",
+	}
+}
+
+// WhenToAccessSection returns when to access memories
+func WhenToAccessSection() []string {
+	return []string{
+		"## When to access memories",
+		"- When memories seem relevant, or the user references prior-conversation work.",
+		"- You MUST access memory when the user explicitly asks you to check, recall, or remember.",
+		"- If the user says to *ignore* or *not use* memory: proceed as if MEMORY.md were empty.",
+		MemoryDriftCaveat(),
+	}
+}
+
+// TrustingRecallSection returns guidance on trusting recalled memories
+func TrustingRecallSection() []string {
+	return []string{
+		"## Before recommending from memory",
+		"",
+		"A memory that names a specific function, file, or flag is a claim that it existed *when the memory was written*. It may have been renamed, removed, or never merged. Before recommending it:",
+		"",
+		"- If the memory names a file path: check the file exists.",
+		"- If the memory names a function or flag: grep for it.",
+		"- If the user is about to act on your recommendation (not just asking about history), verify first.",
+		"",
+		`"The memory says X exists" is not the same as "X exists now."`,
+		"",
+		"A memory that summarizes repo state (activity logs, architecture snapshots) is frozen in time. If the user asks about *recent* or *current* state, prefer `git log` or reading the code over recalling the snapshot.",
+	}
+}
