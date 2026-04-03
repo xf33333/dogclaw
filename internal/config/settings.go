@@ -39,6 +39,7 @@ type Settings struct {
 
 	// Other parameters
 	MaxTurns             int     `json:"maxTurns"`
+	MaxTokens            int     `json:"maxTokens"` // 单次响应最大 token 数
 	MaxBudgetUSD         float64 `json:"maxBudgetUSD"`
 	PermissionMode       string  `json:"permissionMode"`
 	Verbose              bool    `json:"verbose"`
@@ -80,6 +81,7 @@ func DefaultSettings() *Settings {
 			},
 		},
 		MaxTurns:             1000,
+		MaxTokens:            8192,
 		MaxBudgetUSD:         0,
 		PermissionMode:       "default",
 		Verbose:              false,
@@ -116,6 +118,9 @@ func LoadSettings() (*Settings, error) {
 	// Apply defaults for zero-value fields
 	if settings.MaxTurns <= 0 {
 		settings.MaxTurns = DefaultSettings().MaxTurns
+	}
+	if settings.MaxTokens <= 0 {
+		settings.MaxTokens = DefaultSettings().MaxTokens
 	}
 
 	return &settings, nil

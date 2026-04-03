@@ -4,33 +4,88 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"math/rand"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"dogclaw/internal/logger"
 )
 
 const (
 	defaultBaseURL      = "https://api.anthropic.com"
 	anthropicAPIVersion = "2023-06-01"
 
-	// Retry configuration for 429 rate limiting
-	maxRetries    = 5
-	baseDelay     = 2 * time.Second
-	maxDelay      = 60 * time.Second
+	// Retry configuration for 429 rate limiting and server errors
+	maxRetries    = 20
+	baseDelay     = 1 * time.Second
+	maxDelay      = 10 * time.Second
 	backoffFactor = 2.0
 	jitterFactor  = 0.5
 
 	// Leaky bucket rate limiter defaults
 	defaultRate  = 1.0 // requests per second
 	defaultBurst = 3   // max burst size
+
+	// Timeout for context deadline exceeded funnel retry
+	defaultTimeout    = 10 * time.Minute // default HTTP client timeout
+	maxFunnelDuration = 10 * time.Minute // max total time for retry funnel
 )
+
+// doWithFunnelRetry performs timed retries with fixed 1-second delays.
+// Only retries on timeout errors. Returns immediately on success or non-timeout errors.
+func (c *Client) doWithFunnelRetry(ctx context.Context, fn func(context.Context) (*MessageResponse, error)) (*MessageResponse, error) {
+	// Total max time is controlled by ctx (maxFunnelDuration).
+	// 600 attempts * 1s = 10 minutes.
+	for attempt := 1; attempt <= 600; attempt++ {
+		// Check context before waiting
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("funnel retry cancelled: %w", err)
+		}
+
+		// Wait 1 second before this attempt
+		select {
+		case <-time.After(1 * time.Second):
+		case <-ctx.Done():
+			return nil, fmt.Errorf("funnel retry cancelled during wait: %w", ctx.Err())
+		}
+
+		logger.Info("[FunnelRetry] Attempt %d: retrying (waiting 1s)...", attempt)
+
+		resp, err := fn(ctx)
+		if err == nil {
+			logger.Info("[FunnelRetry] Success at attempt %d", attempt)
+			return resp, nil
+		}
+
+		if !isContextDeadlineExceeded(err) {
+			// Non-timeout error — don't continue funnel
+			return nil, err
+		}
+
+		logger.Debug("[FunnelRetry] Timeout at attempt %d, continuing...", attempt)
+	}
+
+	return nil, fmt.Errorf("timeout: funnel retry exhausted")
+}
+
+// HTTP status codes that are retryable (transient server errors)
+// 500, 502, 503, 504 are transient; 501 is not (Not Implemented)
+var retryableStatusCodes = map[int]bool{
+	http.StatusInternalServerError: true, // 500
+	http.StatusBadGateway:          true, // 502
+	http.StatusServiceUnavailable:  true, // 503
+	http.StatusGatewayTimeout:      true, // 504
+	http.StatusTooManyRequests:     true, // 429
+}
 
 // ProviderType represents the API provider type
 type ProviderType string
@@ -117,7 +172,9 @@ func NewClient(apiKey, model, baseURL string) *Client {
 	provider := detectProvider(baseURL, model)
 
 	return &Client{
-		HTTPClient:  &http.Client{},
+		HTTPClient: &http.Client{
+			Timeout: defaultTimeout,
+		},
 		APIKey:      apiKey,
 		BaseURL:     baseURL,
 		Model:       model,
@@ -170,6 +227,18 @@ type MessageRequest struct {
 	TopP          float64         `json:"top_p,omitempty"`
 	StopSequences []string        `json:"stop_sequences,omitempty"`
 	Thinking      *ThinkingConfig `json:"thinking,omitempty"`
+
+	// MemorySummary is for logging/observability only, not sent to API.
+	MemorySummary *MemorySummary `json:"-"`
+}
+
+// MemorySummary holds a human-readable summary of memories loaded
+// into this request (for logging/observability only, not sent to API).
+type MemorySummary struct {
+	ClaudeMDFiles []string // paths of loaded AGENT.md / rules files
+	SemanticHits  []string // names of semantically matched memories
+	AutoMemPrompt bool     // whether auto-memory prompt was injected
+	TotalFiles    int
 }
 
 // ThinkingConfig controls the model's thinking behavior
@@ -386,6 +455,21 @@ type OpenAIError struct {
 // SendMessage sends a message to the API and returns the response
 // Supports both Anthropic and OpenRouter/OpenAI compatible APIs
 func (c *Client) SendMessage(ctx context.Context, req *MessageRequest) (*MessageResponse, error) {
+	// Log memory summary if present
+	if req.MemorySummary != nil {
+		ms := req.MemorySummary
+		logger.Debug("[Memory] Loaded %d files", ms.TotalFiles)
+		for _, f := range ms.ClaudeMDFiles {
+			logger.Debug("[Memory] ClaudeMD: %s", f)
+		}
+		for _, m := range ms.SemanticHits {
+			logger.Debug("[Memory] SemanticHit: %s", m)
+		}
+		if ms.AutoMemPrompt {
+			logger.Debug("[Memory] AutoMemPrompt: yes")
+		}
+	}
+
 	switch c.Provider {
 	case ProviderOpenRouter, ProviderOpenAI:
 		return c.sendOpenAICompatibleRequest(ctx, req)
@@ -408,29 +492,71 @@ func (c *Client) sendAnthropicRequest(ctx context.Context, req *MessageRequest) 
 			return nil, fmt.Errorf("rate limiter wait failed: %w", err)
 		}
 
-		if attempt > 0 {
-			delay := c.calculateDelay(attempt)
-			log.Printf("[Retry] Attempt %d/%d, waiting %v...", attempt, maxRetries, delay)
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return nil, fmt.Errorf("context cancelled during retry: %w", ctx.Err())
+		// For deadline exceeded errors, we need a derived context — the parent's
+		// deadline has already passed, so using it directly would immediately
+		// cancel again only if the context itself is still valid. If the parent
+		// is still alive (only the inner HTTP request timed out), reuse it.
+		reqCtx := ctx
+		if lastErr != nil && isContextDeadlineExceeded(lastErr) {
+			// Derive a fresh context from the parent; only use it if parent is
+			// not itself cancelled/deadline-exceeded.
+			if parentErr := ctx.Err(); parentErr != nil {
+				// Parent context itself is done — cannot retry
+				return nil, fmt.Errorf("context is done: %w", parentErr)
 			}
+			// Use parent directly — the deadline has not yet fired on parent,
+			// only the HTTP client's internal timer fired.
+			reqCtx = ctx
 		}
 
-		resp, err := c.doAnthropicRequest(ctx, body)
+		resp, err := c.doAnthropicRequest(reqCtx, body)
 		if err == nil {
 			return resp, nil
 		}
 
-		// Check if it's a 429 error
-		if isRateLimitError(err) {
+		if isRetryableError(err) {
 			lastErr = err
-			log.Printf("[RateLimit] 429 Too Many Requests (attempt %d/%d)", attempt+1, maxRetries+1)
+			if isRateLimitError(err) {
+				logger.Info("[RateLimit] 429 Too Many Requests (attempt %d/%d)", attempt+1, maxRetries+1)
+			} else if isContextDeadlineExceeded(err) {
+				logger.Info("[Timeout] context deadline exceeded (attempt %d/%d)", attempt+1, maxRetries+1)
+			} else {
+				logger.Info("[TransientError] %v (attempt %d/%d)", err, attempt+1, maxRetries+1)
+			}
+
+			// Use Retry-After from error if available, otherwise fall back to backoff
+			var retryAfter time.Duration
+			if rateLimitErr, ok := err.(*RateLimitError); ok && rateLimitErr.RetryAfter > 0 {
+				retryAfter = rateLimitErr.RetryAfter
+			} else {
+				retryAfter = c.calculateDelay(attempt)
+			}
+			logger.Debug("[Retry] Waiting %v before next attempt...", retryAfter)
+			select {
+			case <-time.After(retryAfter):
+			case <-ctx.Done():
+				return nil, fmt.Errorf("context cancelled during retry: %w", ctx.Err())
+			}
 			continue
 		}
 
-		// Non-retryable error
+		// Non-retryable error — but timeout errors get funnel retry
+		if isContextDeadlineExceeded(err) {
+			logger.Info("[Timeout] Entering funnel retry (window: %v)...", maxFunnelDuration)
+			funnelCtx, cancel := context.WithTimeout(context.Background(), maxFunnelDuration)
+			defer cancel()
+
+			// Copy parent cancellation
+			go func() {
+				<-ctx.Done()
+				cancel()
+			}()
+
+			return c.doWithFunnelRetry(funnelCtx, func(ctx context.Context) (*MessageResponse, error) {
+				return c.doAnthropicRequest(ctx, body)
+			})
+		}
+
 		return nil, err
 	}
 
@@ -450,7 +576,7 @@ func (c *Client) doAnthropicRequest(ctx context.Context, body []byte) (*MessageR
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, c.wrapNetworkError(ctx, err)
 	}
 	defer resp.Body.Close()
 
@@ -461,6 +587,13 @@ func (c *Client) doAnthropicRequest(ctx context.Context, body []byte) (*MessageR
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
+		if retryableStatusCodes[resp.StatusCode] {
+			return nil, &TransientError{StatusCode: resp.StatusCode, Body: string(respBody)}
+		}
+		// Check for context length exceeded (non-retryable 400 error)
+		if resp.StatusCode == http.StatusBadRequest && isContextLengthExceededError(string(respBody), "anthropic") {
+			return nil, &ContextLengthExceededError{StatusCode: resp.StatusCode, Body: string(respBody), Provider: ProviderAnthropic}
+		}
 		return nil, fmt.Errorf("API error: %s - %s", resp.Status, string(respBody))
 	}
 
@@ -489,7 +622,10 @@ func (c *Client) sendOpenAICompatibleRequest(ctx context.Context, req *MessageRe
 		endpoint = c.BaseURL + "/chat/completions"
 	}
 
-	log.Printf("[OpenRouter] POST %s", endpoint)
+	logger.Info("[OpenRouter] POST %s", endpoint)
+
+	// Track consecutive failures for leaky bucket adjustment
+	var consecutiveTimeouts int
 
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -498,29 +634,71 @@ func (c *Client) sendOpenAICompatibleRequest(ctx context.Context, req *MessageRe
 			return nil, fmt.Errorf("rate limiter wait failed: %w", err)
 		}
 
-		if attempt > 0 {
-			delay := c.calculateDelay(attempt)
-			log.Printf("[Retry] Attempt %d/%d, waiting %v...", attempt, maxRetries, delay)
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return nil, fmt.Errorf("context cancelled during retry: %w", ctx.Err())
+		// For deadline exceeded errors, check if parent context is still valid
+		reqCtx := ctx
+		if lastErr != nil && isContextDeadlineExceeded(lastErr) {
+			if parentErr := ctx.Err(); parentErr != nil {
+				// Parent context itself is done — cannot retry
+				return nil, fmt.Errorf("context is done: %w", parentErr)
 			}
+			consecutiveTimeouts++
+			// After multiple timeouts, use reduced rate to avoid hammering
+			if consecutiveTimeouts >= 2 {
+				logger.Info("[Timeout] Multiple consecutive timeouts, waiting longer...")
+			}
+		} else {
+			consecutiveTimeouts = 0
 		}
 
-		resp, err := c.doOpenAIRequest(ctx, endpoint, body)
+		resp, err := c.doOpenAIRequest(reqCtx, endpoint, body)
 		if err == nil {
 			return resp, nil
 		}
 
-		// Check if it's a 429 error
-		if isRateLimitError(err) {
+		// Check if it's a retryable (transient) error
+		if isRetryableError(err) {
 			lastErr = err
-			log.Printf("[RateLimit] 429 Too Many Requests (attempt %d/%d)", attempt+1, maxRetries+1)
+			if isRateLimitError(err) {
+				logger.Info("[RateLimit] 429 Too Many Requests (attempt %d/%d)", attempt+1, maxRetries+1)
+			} else if isContextDeadlineExceeded(err) {
+				logger.Info("[Timeout] context deadline exceeded (attempt %d/%d)", attempt+1, maxRetries+1)
+			} else {
+				logger.Info("[TransientError] %v (attempt %d/%d)", err, attempt+1, maxRetries+1)
+			}
+
+			// Use Retry-After from error if available, otherwise fall back to backoff
+			var retryAfter time.Duration
+			if rateLimitErr, ok := err.(*RateLimitError); ok && rateLimitErr.RetryAfter > 0 {
+				retryAfter = rateLimitErr.RetryAfter
+			} else {
+				retryAfter = c.calculateDelay(attempt)
+			}
+			logger.Debug("[Retry] Waiting %v before next attempt...", retryAfter)
+			select {
+			case <-time.After(retryAfter):
+			case <-ctx.Done():
+				return nil, fmt.Errorf("context cancelled during retry: %w", ctx.Err())
+			}
 			continue
 		}
 
-		// Non-retryable error
+		// Non-retryable error — but timeout errors get funnel retry
+		if isContextDeadlineExceeded(err) {
+			logger.Info("[Timeout] Entering funnel retry (window: %v)...", maxFunnelDuration)
+			funnelCtx, cancel := context.WithTimeout(context.Background(), maxFunnelDuration)
+			defer cancel()
+
+			// Copy parent cancellation
+			go func() {
+				<-ctx.Done()
+				cancel()
+			}()
+
+			return c.doWithFunnelRetry(funnelCtx, func(ctx context.Context) (*MessageResponse, error) {
+				return c.doOpenAIRequest(ctx, endpoint, body)
+			})
+		}
+
 		return nil, err
 	}
 
@@ -543,7 +721,7 @@ func (c *Client) doOpenAIRequest(ctx context.Context, endpoint string, body []by
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, c.wrapNetworkError(ctx, err)
 	}
 	defer resp.Body.Close()
 
@@ -554,8 +732,19 @@ func (c *Client) doOpenAIRequest(ctx context.Context, endpoint string, body []by
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
+		if retryableStatusCodes[resp.StatusCode] {
+			return nil, &TransientError{StatusCode: resp.StatusCode, Body: string(respBody)}
+		}
+		// Check for context length exceeded (non-retryable 400 error)
+		if resp.StatusCode == http.StatusBadRequest && isContextLengthExceededError(string(respBody), "anthropic") {
+			return nil, &ContextLengthExceededError{StatusCode: resp.StatusCode, Body: string(respBody), Provider: ProviderAnthropic}
+		}
+		// Check OpenAI-style error (for direct OpenAI calls or OpenRouter)
 		var openAIError OpenAIError
 		if err := json.Unmarshal(respBody, &openAIError); err == nil && openAIError.Error.Message != "" {
+			if isContextLengthExceededError(string(respBody), "openai") {
+				return nil, &ContextLengthExceededError{StatusCode: resp.StatusCode, Body: string(respBody), Provider: c.Provider}
+			}
 			return nil, fmt.Errorf("API error: %s - %s", resp.Status, openAIError.Error.Message)
 		}
 		return nil, fmt.Errorf("API error: %s - %s", resp.Status, string(respBody))
@@ -855,9 +1044,178 @@ func (e *RateLimitError) Error() string {
 	return fmt.Sprintf("rate limit exceeded (HTTP %d): %s", e.StatusCode, e.Body)
 }
 
+// TransientError represents a retryable server error (5xx)
+type TransientError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *TransientError) Error() string {
+	return fmt.Sprintf("transient server error (HTTP %d): %s", e.StatusCode, e.Body)
+}
+
+// ContextLengthExceededError represents a non-retryable error where the
+// prompt exceeds the model's context window (HTTP 400).
+// Anthropic returns: {"type":"error","error":{"type":"overloaded_error","message":"prompt is too long"}}
+// OpenRouter/OpenAI returns: {"error":{"message":"This model's maximum context length is...","type":"invalid_request_error"}}
+type ContextLengthExceededError struct {
+	StatusCode int
+	Body       string
+	Provider   ProviderType
+}
+
+func (e *ContextLengthExceededError) Error() string {
+	return fmt.Sprintf("context length exceeded (HTTP %d): %s", e.StatusCode, e.Body)
+}
+
+// ContextDeadlineExceededError represents a request timeout (HTTP client deadline exceeded).
+// This occurs when the server doesn't respond within the specified timeout,
+// NOT when the prompt is too long. It's potentially retryable.
+type ContextDeadlineExceededError struct {
+	Err error
+}
+
+func (e *ContextDeadlineExceededError) Error() string {
+	return fmt.Sprintf("context deadline exceeded: %v", e.Err)
+}
+
+func (e *ContextDeadlineExceededError) Unwrap() error {
+	return e.Err
+}
+
+// wrapNetworkError wraps network-level errors with appropriate typed errors.
+// Distinguishes between:
+//   - context.Canceled: user cancelled (not retryable)
+//   - context.DeadlineExceeded: request timeout (retryable)
+//   - DNS/connection errors: network issues (retryable)
+func (c *Client) wrapNetworkError(ctx context.Context, err error) error {
+	// Check if context was cancelled first
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return fmt.Errorf("request cancelled: %w", err)
+	}
+
+	// Check for deadline exceeded (timeout)
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return &ContextDeadlineExceededError{Err: err}
+	}
+
+	// Check for network-level errors (DNS, connection refused, etc.)
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		if netErr.Timeout() {
+			return &ContextDeadlineExceededError{Err: err}
+		}
+		// Other network errors are also potentially retryable
+		return &TransientError{StatusCode: 0, Body: err.Error()}
+	}
+
+	// Check for URL errors (connection refused, etc.)
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		// URL errors are typically network issues
+		return &TransientError{StatusCode: 0, Body: err.Error()}
+	}
+
+	return fmt.Errorf("failed to send request: %w", err)
+}
+
+// isContextDeadlineExceeded checks if an error is a context deadline exceeded error
+func isContextDeadlineExceeded(err error) bool {
+	if err == nil {
+		return false
+	}
+	var deadlineErr *ContextDeadlineExceededError
+	if errors.As(err, &deadlineErr) {
+		return true
+	}
+	// Also check generic context.DeadlineExceeded (may be wrapped in fmt.Errorf)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	// Fallback: check error message
+	errStr := err.Error()
+	return strings.Contains(errStr, "context deadline exceeded") ||
+		strings.Contains(errStr, "Client.Timeout exceeded while awaiting headers") ||
+		strings.Contains(errStr, "i/o timeout")
+}
+
 // isRateLimitError checks if an error is a 429 rate limit error
 func isRateLimitError(err error) bool {
 	return err != nil && (strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "Too Many Requests"))
+}
+
+// isContextLengthExceededError detects if a raw API response body indicates
+// that the prompt exceeds the model's context window.
+// Supports both Anthropic and OpenAI-style error formats.
+func isContextLengthExceededError(body string, provider string) bool {
+	bodyLower := strings.ToLower(body)
+
+	// Anthropic patterns
+	// {"type":"error","error":{"type":"overloaded_error","message":"prompt is too long"}}
+	// {"type":"error","error":{"type":"invalid_request_error","message":"...too many tokens..."}}
+	if provider == "anthropic" || provider == "" {
+		if strings.Contains(bodyLower, "prompt is too long") ||
+			strings.Contains(bodyLower, "too many tokens") ||
+			strings.Contains(bodyLower, "overloaded_error") ||
+			strings.Contains(bodyLower, "exceeds the maximum number of tokens") ||
+			strings.Contains(bodyLower, "messages result in") && strings.Contains(bodyLower, "tokens which exceeds the remaining") {
+			return true
+		}
+	}
+
+	// OpenAI/OpenRouter patterns
+	// {"error":{"message":"This model's maximum context length is...","type":"invalid_request_error"}}
+	if provider == "openai" || provider == "" {
+		if strings.Contains(bodyLower, "maximum context length") ||
+			strings.Contains(bodyLower, "context_length_exceeded") ||
+			strings.Contains(bodyLower, "prompt is too long") ||
+			strings.Contains(bodyLower, "reduce the length") ||
+			strings.Contains(bodyLower, "this model's maximum") && strings.Contains(bodyLower, "context") {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isRetryableError checks if an error is retryable (rate limit, transient server error, or timeout)
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if isRateLimitError(err) {
+		return true
+	}
+	// Check for TransientError
+	var transientErr *TransientError
+	if errAs(err, &transientErr) {
+		return true
+	}
+	// Context deadline exceeded is retryable — it's a timeout, not a cancellation
+	if isContextDeadlineExceeded(err) {
+		return true
+	}
+	// Fallback: check error message for common transient patterns
+	errStr := err.Error()
+	return strings.Contains(errStr, "500") || strings.Contains(errStr, "502") ||
+		strings.Contains(errStr, "503") || strings.Contains(errStr, "504")
+}
+
+// errAs is a helper for type assertion (like errors.As)
+func errAs(err error, target any) bool {
+	switch t := target.(type) {
+	case **TransientError:
+		if te, ok := err.(*TransientError); ok {
+			*t = te
+			return true
+		}
+	case **RateLimitError:
+		if rle, ok := err.(*RateLimitError); ok {
+			*t = rle
+			return true
+		}
+	}
+	return false
 }
 
 // calculateDelay calculates delay with exponential backoff and jitter

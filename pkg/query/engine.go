@@ -2,20 +2,28 @@ package query
 
 import (
 	"context"
+	"dogclaw/internal/logger"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
+	"time"
+
+	"github.com/sirupsen/logrus"
 
 	"dogclaw/internal/api"
-	"dogclaw/pkg/claudemd"
 	"dogclaw/pkg/compact"
-	ctxpkg "dogclaw/pkg/context"
+	"dogclaw/pkg/compactmem"
+	"dogclaw/pkg/core"
 	"dogclaw/pkg/fastmode"
 	"dogclaw/pkg/history"
+	"dogclaw/pkg/memory"
+	"dogclaw/pkg/semantic"
 	"dogclaw/pkg/slash"
 	"dogclaw/pkg/thinking"
+	"dogclaw/pkg/transcript"
 	"dogclaw/pkg/types"
 	"dogclaw/pkg/usage"
 )
@@ -27,6 +35,7 @@ type QueryEngine struct {
 	messages       []api.MessageParam
 	systemPrompt   string
 	maxTurns       int
+	maxTokens      int
 	currentTurn    int
 	verbose        bool
 	compactConfig  *compact.AutoCompactConfig
@@ -61,9 +70,6 @@ type QueryEngine struct {
 	structuredOutputRetries    int
 	maxStructuredOutputRetries int
 
-	// Output writer (defaults to os.Stdout, can be set to terminal.Manager for readline-safe output)
-	out io.Writer
-
 	// Display settings
 	showToolUsageInReply bool // Whether to show tool usage explanation in replies
 	showThinkingInLog    bool // Whether to log LLM thinking content
@@ -74,6 +80,32 @@ type QueryEngine struct {
 
 	// LastTurnToolCalls records the last turn's tool use blocks (for channels to consume after SubmitMessage)
 	LastTurnToolCalls []ToolCallInfo
+
+	// Memory system
+	memoryDir        string
+	memoryIndex      *semantic.MemoryIndex
+	memoryCompactor  *compactmem.CompactionConfig
+	autoMemoryPrompt string
+	memoryInitOnce   sync.Once
+	memoryCompacted  bool // tracks whether compaction has been attempted this session
+
+	// Transcript-based session resume
+	transcriptProjectMgr *transcript.ProjectManager
+	transcriptFile       *transcript.TranscriptFile
+	sessionManager       *transcript.SessionManager // for advanced session operations (search, summaries)
+
+	// Per-query turn budget: when set > 0, currentTurn is checked against this value.
+	// Reset to queryMaxTurns at the start of each SubmitMessage / RunMainLoop call
+	// so each query gets its own turn budget.
+	queryMaxTurns int
+	// queryLimitGraceMode: when true and queryMaxTurns is reached, add a system
+	// prompt asking for a summary and allow one final turn before stopping.
+	queryLimitGraceMode bool
+
+	// logger is the logrus instance for structured logging
+	logger            *logrus.Logger
+	asyncHook         *logger.AsyncHook // 异步日志钩子，用于非阻塞写入
+	lastAssistantText string            // cached text of most recent assistant reply (for channels)
 }
 
 // ToolCallInfo describes a single tool call for external consumers (e.g. QQ channel).
@@ -87,6 +119,9 @@ type ToolCallInfo struct {
 func NewQueryEngine(client *api.Client, tools []types.Tool, systemPrompt string, maxTurns int) *QueryEngine {
 	// Get current working directory
 	cwd, _ := os.Getwd()
+
+	// Initialize logger with logrus
+	logger := initLogger(cwd)
 
 	// Initialize history manager
 	hm := history.GetHistoryManager()
@@ -103,12 +138,24 @@ func NewQueryEngine(client *api.Client, tools []types.Tool, systemPrompt string,
 	// Initialize usage tracker
 	usageTracker := &usage.AccumulatedUsage{}
 
+	// Initialize memory system
+	memoryDir := memory.GetAutoMemPath()
+	memoryCompactor := compactmem.DefaultCompactionConfig()
+
+	// Initialize transcript project manager
+	pm, _ := transcript.NewProjectManager("")
+
+	// Initialize session manager
+	baseDir := pm.GetBaseDir()
+	sm, _ := transcript.NewSessionManager(baseDir)
+
 	return &QueryEngine{
 		client:         client,
 		tools:          tools,
 		messages:       make([]api.MessageParam, 0),
 		systemPrompt:   systemPrompt,
 		maxTurns:       maxTurns,
+		maxTokens:      8192,
 		currentTurn:    0,
 		compactConfig:  compact.DefaultAutoCompactConfig(),
 		compactTracker: &compact.AutoCompactTracker{},
@@ -127,36 +174,95 @@ func NewQueryEngine(client *api.Client, tools []types.Tool, systemPrompt string,
 			return m
 		}(),
 		maxStructuredOutputRetries: 5,
+
+		// Memory system
+		memoryDir:       memoryDir,
+		memoryIndex:     semantic.NewMemoryIndex(semantic.DefaultEmbeddingDim),
+		memoryCompactor: memoryCompactor,
+
+		// Transcript system
+		transcriptProjectMgr: pm,
+		sessionManager:       sm,
+
+		// Logger
+		logger: logger,
 	}
+}
+
+// Custom formatter: 级别-日期-代码(行号)-日志内容
+type customFormatter struct{}
+
+func (f *customFormatter) Format(entry *logrus.Entry) ([]byte, error) {
+	// Level: INFO/DEBUG/WARN/ERROR
+	level := strings.ToUpper(entry.Level.String())
+
+	// Timestamp: 2006-01-02 15:04:05
+	timestamp := entry.Time.Format("2006-01-02 15:04:05")
+
+	// Caller info: file:line
+	caller := ""
+	if entry.HasCaller() {
+		// Extract just filename and line
+		file := filepath.Base(entry.Caller.File)
+		caller = fmt.Sprintf("%s:%d", file, entry.Caller.Line)
+	} else {
+		caller = "unknown"
+	}
+
+	// Message
+	msg := entry.Message
+	if entry.Context != nil {
+		msg = fmt.Sprintf("%s %v", entry.Message, entry.Context)
+	}
+
+	// Format: LEVEL-DATE-CALLER-MSG
+	line := fmt.Sprintf("%s-%s-%s %s\n", level, timestamp, caller, msg)
+	return []byte(line), nil
+}
+
+// initLogger creates and configures a logrus logger
+// Logs are written to ./logs/dogclaw_YYYY-MM-DD.log (rotated daily)
+func initLogger(cwd string) *logrus.Logger {
+	logger := logrus.New()
+
+	// Ensure logs directory exists
+	logsDir := filepath.Join(cwd, "logs")
+	if err := os.MkdirAll(logsDir, 0755); err != nil {
+		// Fallback to stderr if can't create dir
+		logger.SetOutput(os.Stderr)
+		logger.Warnf("Failed to create logs dir %s: %v, falling back to stderr", logsDir, err)
+	} else {
+		// Daily log file: dogclaw_2026-04-06.log
+		logFile := filepath.Join(logsDir, fmt.Sprintf("dogclaw_%s.log", time.Now().Format("2006-01-02")))
+		f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			logger.SetOutput(os.Stderr)
+			logger.Warnf("Failed to open log file %s: %v, falling back to stderr", logFile, err)
+		} else {
+			logger.SetOutput(f)
+		}
+	}
+
+	// Set custom formatter
+	logger.SetFormatter(&customFormatter{})
+
+	// Set level (default Info, can be overridden by env LOG_LEVEL)
+	level := os.Getenv("LOG_LEVEL")
+	if level == "" {
+		level = "info"
+	}
+	lvl, err := logrus.ParseLevel(level)
+	if err != nil {
+		lvl = logrus.InfoLevel
+	}
+	logger.SetLevel(lvl)
+
+	return logger
 }
 
 // SetVerbose enables/disables verbose mode
 func (qe *QueryEngine) SetVerbose(verbose bool) {
 	qe.verbose = verbose
-}
-
-// SetOutput sets the output writer for engine messages.
-// Pass the terminal.Manager for readline-safe output that won't corrupt the prompt.
-func (qe *QueryEngine) SetOutput(out io.Writer) {
-	qe.out = out
-}
-
-// println writes output through the configured writer (or os.Stdout as fallback).
-func (qe *QueryEngine) println(a ...any) {
-	if qe.out != nil {
-		fmt.Fprintln(qe.out, a...)
-	} else {
-		fmt.Println(a...)
-	}
-}
-
-// printf writes formatted output through the configured writer (or os.Stdout as fallback).
-func (qe *QueryEngine) printf(format string, a ...any) {
-	if qe.out != nil {
-		fmt.Fprintf(qe.out, format, a...)
-	} else {
-		fmt.Printf(format, a...)
-	}
 }
 
 // SetSessionID sets the session ID for history tracking
@@ -168,410 +274,6 @@ func (qe *QueryEngine) SetSessionID(sessionID string) {
 // GetMessages returns the current message list
 func (qe *QueryEngine) GetMessages() []api.MessageParam {
 	return qe.messages
-}
-
-// SubmitMessage processes a user message and runs the tool call loop
-func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
-	// Check if this is a slash command
-	if slash.IsSlashCommand(prompt) {
-		return qe.handleSlashCommand(ctx, prompt)
-	}
-
-	// Add to history
-	qe.historyMgr.AddSimpleHistory(prompt)
-
-	// Add user message
-	userMsg := api.MessageParam{
-		Role:    "user",
-		Content: prompt,
-	}
-	qe.messages = append(qe.messages, userMsg)
-
-	// Main query loop
-	for qe.currentTurn < qe.maxTurns {
-		qe.currentTurn++
-
-		if qe.verbose {
-			qe.printf("[Turn %d/%d]\n", qe.currentTurn, qe.maxTurns)
-		}
-
-		// Check if auto-compact is needed
-		if qe.compactConfig.Enabled {
-			shouldCompact, tokenCount, threshold := compact.CheckAutoCompact(qe.messages, qe.compactConfig, qe.compactTracker)
-			if shouldCompact {
-				if qe.verbose {
-					qe.printf("[Auto-compact triggered: %d tokens >= threshold %d]\n", tokenCount, threshold)
-				}
-				result, err := compact.CompactMessages(ctx, qe.client, qe.messages, qe.systemPrompt, qe.compactConfig)
-				if err != nil {
-					qe.printf("[Auto-compact error: %v]\n", err)
-				} else if result != nil {
-					qe.messages = compact.ApplyCompactResult(qe.messages, result)
-					qe.compactTracker.Compacted = true
-					qe.compactTracker.TurnCounter++
-					if qe.verbose {
-						qe.printf("[Auto-compact complete: %d -> %d messages, %d -> %d tokens]\n",
-							result.OriginalMessageCount, result.CompactedMessageCount,
-							result.PreCompactTokenCount, result.PostCompactTokenCount)
-					}
-				}
-			} else {
-				// Check for warning state
-				warning, isBlocking := compact.GetWarningState(tokenCount, qe.compactConfig)
-				if warning != "" {
-					qe.println(warning)
-				}
-				if isBlocking {
-					return fmt.Errorf("context window is full (blocking limit reached). Please start a new conversation.")
-				}
-			}
-		}
-
-		// Check if snip is needed (aggressive message count reduction)
-		if qe.snipConfig.Enabled {
-			snipResult := compact.SnipHistory(qe.messages, qe.snipConfig)
-			if snipResult != nil {
-				if qe.verbose {
-					qe.printf("[Snip: removed %d messages, %d remaining]\n",
-						snipResult.SnippedCount, len(snipResult.Remaining))
-				}
-				qe.messages = snipResult.Remaining
-			}
-		}
-
-		// Build full system prompt with context
-		fullSystemPrompt := qe.buildFullSystemPrompt()
-
-		// Build API request
-		req := &api.MessageRequest{
-			Model:     qe.client.Model,
-			MaxTokens: 8192,
-			System:    fullSystemPrompt,
-			Messages:  qe.messages,
-			Tools:     qe.toAPITools(),
-		}
-
-		// Configure thinking based on current settings
-		if qe.thinkingConfig.Enabled {
-			if qe.thinkingConfig.Type == "adaptive" {
-				req.Thinking = &api.ThinkingConfig{
-					Type: "enabled",
-				}
-			} else {
-				req.Thinking = &api.ThinkingConfig{
-					Type:         "enabled",
-					BudgetTokens: qe.thinkingConfig.BudgetTokens,
-				}
-			}
-		} else {
-			req.Thinking = &api.ThinkingConfig{
-				Type: "disabled",
-			}
-		}
-
-		// Use fast mode model if active
-		if qe.fastModeManager.IsActive() {
-			req.Model = qe.fastModeManager.GetModel()
-		}
-
-		// Call API
-		resp, err := qe.client.SendMessage(ctx, req)
-		if err != nil {
-			return fmt.Errorf("API error: %w", err)
-		}
-
-		// Track usage from response
-		if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
-			tokenUsage := usage.TokenUsage{
-				InputTokens:              resp.Usage.InputTokens,
-				OutputTokens:             resp.Usage.OutputTokens,
-				CacheReadInputTokens:     resp.Usage.CacheReadInputTokens,
-				CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
-			}
-			qe.usageTracker.Add(tokenUsage)
-
-			// Update cost
-			pricing := usage.GetPricingForModel(qe.modelName)
-			qe.currentCost = qe.usageTracker.CalculateCost(pricing)
-
-			// Check budget
-			if qe.maxBudgetUSD > 0 && qe.currentCost >= qe.maxBudgetUSD {
-				return fmt.Errorf("reached maximum budget ($%.2f)", qe.maxBudgetUSD)
-			}
-		}
-
-		// Build assistant message content blocks
-		var assistantContent []api.ContentBlockParam
-		var toolUseDetails []string
-
-		// Process response - add text content and capture thinking
-		for _, block := range resp.Content {
-			if block.Type == "text" && block.Text != "" {
-				assistantContent = append(assistantContent, api.ContentBlockParam{
-					Type: "text",
-					Text: block.Text,
-				})
-			}
-			if block.Type == "thinking" && block.Text != "" {
-				if qe.showThinkingInLog {
-					qe.printf("[🧠 Thinking (%d chars)]\n%s\n[End Thinking]\n", len(block.Text), block.Text)
-				}
-			}
-		}
-
-		// Check for tool calls
-		var toolUseBlocks []api.ContentBlock
-		for _, block := range resp.Content {
-			if block.Type == "tool_use" {
-				toolUseBlocks = append(toolUseBlocks, block)
-			}
-		}
-
-		if len(toolUseBlocks) > 0 {
-			// Add tool_use blocks to assistant message
-			for _, block := range toolUseBlocks {
-				assistantContent = append(assistantContent, api.ContentBlockParam{
-					Type:  "tool_use",
-					ID:    block.ID,
-					Name:  block.Name,
-					Input: block.Input,
-				})
-
-				// Collect tool use details for logging
-				inputJSON, _ := json.Marshal(block.Input)
-				detail := fmt.Sprintf("  📦 %s (id=%s): %s", block.Name, block.ID, string(inputJSON))
-				toolUseDetails = append(toolUseDetails, detail)
-			}
-
-			// Log tool calls
-			if qe.verbose {
-				for _, detail := range toolUseDetails {
-					qe.println(detail)
-				}
-			}
-		}
-
-		// Add assistant message to history
-		if len(assistantContent) > 0 {
-			qe.messages = append(qe.messages, api.MessageParam{
-				Role:    "assistant",
-				Content: assistantContent,
-			})
-		}
-
-		if len(toolUseBlocks) == 0 {
-			// No tool calls, just text response - we're done
-			if qe.verbose {
-				qe.println("[Response complete]")
-			}
-			return nil
-		}
-
-		// Reset per-turn tool call tracking
-		qe.LastTurnToolCalls = nil
-
-		// Execute tool calls and add results
-		var toolResults []string
-		for _, block := range toolUseBlocks {
-			toolName := block.Name
-			toolInput := block.Input
-			toolUseID := block.ID
-
-			if qe.verbose {
-				qe.printf("[Tool call: %s (id=%s)]\n", toolName, toolUseID)
-			}
-
-			// Build human-readable summary + JSON summary for external consumers
-			summary := buildToolCallSummary(toolName, toolInput)
-			inputJSON, _ := json.Marshal(toolInput)
-
-			// Record for channel consumption
-			qe.LastTurnToolCalls = append(qe.LastTurnToolCalls, ToolCallInfo{
-				Name:    toolName,
-				Input:   string(inputJSON),
-				Summary: summary,
-			})
-
-			// Invoke callback for real-time notification (e.g. QQ channel)
-			if qe.ToolCallCallback != nil {
-				qe.ToolCallCallback(toolName, summary)
-			}
-
-			// Find tool
-			tool := qe.findTool(toolName)
-			if tool == nil {
-				qe.addToolResult(toolUseID, fmt.Sprintf("Error: Unknown tool '%s'", toolName), true)
-				toolResults = append(toolResults, fmt.Sprintf("- **%s**: ❌ Unknown tool", toolName))
-				continue
-			}
-
-			// Convert input to map
-			inputMap, ok := toolInput.(map[string]any)
-			if !ok {
-				qe.addToolResult(toolUseID, "Error: Invalid tool input", true)
-				toolResults = append(toolResults, fmt.Sprintf("- **%s**: ❌ Invalid input", toolName))
-				continue
-			}
-
-			// Execute tool
-			toolCtx := types.ToolUseContext{
-				Cwd:             qe.cwd,
-				AbortController: ctx,
-				Tools:           qe.tools,
-			}
-
-			result, err := tool.Call(ctx, inputMap, toolCtx, nil)
-			if err != nil {
-				qe.addToolResult(toolUseID, fmt.Sprintf("Error: %v", err), true)
-				toolResults = append(toolResults, fmt.Sprintf("- **%s**: ❌ Error: %v", toolName, err))
-				continue
-			}
-
-			// Log tool result summary
-			resultStr, _ := json.Marshal(result.Data)
-			if qe.verbose {
-				preview := string(resultStr)
-				if len(preview) > 200 {
-					preview = preview[:200] + "..."
-				}
-				qe.printf("  ✅ Result: %s\n", preview)
-			}
-
-			// Collect tool result for optional reply
-			status := "✅"
-			if result.IsError {
-				status = "❌"
-			}
-			toolResults = append(toolResults, fmt.Sprintf("- **%s**: %s", toolName, status))
-
-			// Add tool result
-			qe.addToolResult(toolUseID, string(resultStr), result.IsError)
-		}
-
-		// If showToolUsageInReply is enabled, append tool usage summary to the assistant's text
-		if qe.showToolUsageInReply && len(toolUseBlocks) > 0 {
-			// Find the last text block to append the summary
-			foundText := false
-			for i := len(assistantContent) - 1; i >= 0; i-- {
-				if assistantContent[i].Type == "text" {
-					summary := "\n\n---\n**🔧 Tool Usage:**\n" + strings.Join(toolResults, "\n")
-					assistantContent[i].Text += summary
-					foundText = true
-					break
-				}
-			}
-			// If no text block exists, create one
-			if !foundText {
-				summary := "**🔧 Tool Usage:**\n" + strings.Join(toolResults, "\n")
-				assistantContent = append(assistantContent, api.ContentBlockParam{
-					Type: "text",
-					Text: summary,
-				})
-			}
-		}
-	}
-
-	return fmt.Errorf("reached maximum turns (%d)", qe.maxTurns)
-}
-
-// buildFullSystemPrompt combines base system prompt with context (git status, AGENT.md, etc.)
-func (qe *QueryEngine) buildFullSystemPrompt() string {
-	var parts []string
-
-	// Base system prompt with tool descriptions
-	if qe.systemPrompt != "" {
-		parts = append(parts, qe.systemPrompt)
-	}
-
-	// Add skills section
-	skillsSection := qe.skillRegistry.FormatSkillsForPrompt()
-	if skillsSection != "" {
-		parts = append(parts, skillsSection)
-	}
-
-	// Load AGENT.md context
-	memoryFiles, err := claudemd.GetMemoryFiles(qe.cwd)
-	if err == nil {
-		agentMdContext := claudemd.BuildAgentMdContext(memoryFiles)
-		if agentMdContext != "" {
-			parts = append(parts, agentMdContext)
-		}
-	}
-
-	// System context (git status, current date)
-	sysCtx := ctxpkg.GetSystemContext()
-	if sysCtx.GitStatus != "" {
-		parts = append(parts, "## Git Status\n\n"+sysCtx.GitStatus)
-	}
-	parts = append(parts, sysCtx.CurrentDate)
-
-	return strings.Join(parts, "\n\n")
-}
-
-// toAPITools converts tools to API tool definitions
-func (qe *QueryEngine) toAPITools() []api.ToolParam {
-	var apiTools []api.ToolParam
-	for _, tool := range qe.tools {
-		if !tool.IsEnabled() {
-			continue
-		}
-		apiTools = append(apiTools, api.ToolParam{
-			Name:        tool.Name(),
-			Description: tool.Description(nil, types.ToolDescriptionOptions{}),
-			InputSchema: tool.InputSchema(),
-		})
-	}
-	return apiTools
-}
-
-// findTool finds a tool by name
-func (qe *QueryEngine) findTool(name string) types.Tool {
-	for _, tool := range qe.tools {
-		if tool.Name() == name {
-			return tool
-		}
-	}
-	return nil
-}
-
-// addToolResult adds a tool result message
-func (qe *QueryEngine) addToolResult(toolUseID string, content string, isError bool) {
-	qe.messages = append(qe.messages, api.MessageParam{
-		Role: "user",
-		Content: []api.ContentBlockParam{
-			{
-				Type:      "tool_result",
-				ToolUseID: toolUseID,
-				Content: []api.ContentBlockParam{
-					{
-						Type: "text",
-						Text: content,
-					},
-				},
-				IsError: isError,
-			},
-		},
-	})
-}
-
-// GetLastAssistantText returns the last assistant's text response
-func (qe *QueryEngine) GetLastAssistantText() string {
-	for i := len(qe.messages) - 1; i >= 0; i-- {
-		msg := qe.messages[i]
-		if msg.Role == "assistant" {
-			if blocks, ok := msg.Content.([]api.ContentBlockParam); ok {
-				for _, block := range blocks {
-					if block.Type == "text" && block.Text != "" {
-						return block.Text
-					}
-				}
-			}
-			if text, ok := msg.Content.(string); ok {
-				return text
-			}
-		}
-	}
-	return ""
 }
 
 // handleSlashCommand processes a slash command and returns the result
@@ -597,20 +299,19 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 		qe.currentTurn = 0
 		qe.usageTracker = &usage.AccumulatedUsage{}
 		qe.historyMgr.Init(qe.cwd, qe.sessionID)
-		qe.println(result.Output)
+		qe.logger.Info(result.Output)
 
 	case "model":
-		// Extract model name from args
 		_, args := slash.ParseCommand(input)
 		if args != "" {
 			qe.modelName = strings.ToLower(args)
 			qe.client.Model = qe.modelName
 		}
-		qe.println(result.Output)
+		qe.logger.Info(result.Output)
 
 	case "verbose":
 		qe.verbose = !qe.verbose
-		qe.printf("Verbose mode: %v\n", qe.verbose)
+		qe.logger.Infof("Verbose mode: %v", qe.verbose)
 
 	case "max-turns":
 		_, args := slash.ParseCommand(input)
@@ -621,15 +322,14 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 				qe.maxTurns = maxTurns
 			}
 		}
-		qe.println(result.Output)
+		qe.logger.Info(result.Output)
 
 	case "usage":
-		// Use the skill-aware handler
 		cmdResult, err := slash.HandleUsageCommand(ctx, "", qe.usageTracker)
 		if err != nil {
 			return err
 		}
-		qe.println(cmdResult.Output)
+		qe.logger.Info(cmdResult.Output)
 
 	case "skills":
 		_, args := slash.ParseCommand(input)
@@ -637,22 +337,21 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 		if err != nil {
 			return err
 		}
-		qe.println(cmdResult.Output)
+		qe.logger.Info(cmdResult.Output)
 
 	case "thinking":
 		_, args := slash.ParseCommand(input)
 		args = strings.TrimSpace(args)
 		if args == "" {
-			// Show current thinking state
 			state := "enabled"
 			if !qe.thinkingConfig.Enabled {
 				state = "disabled"
 			}
-			qe.printf("Thinking: %s (budget: %d tokens)\n", state, qe.thinkingConfig.BudgetTokens)
+			qe.logger.Infof("Thinking: %s (budget: %d tokens)", state, qe.thinkingConfig.BudgetTokens)
 		} else {
 			thinkType, err := thinking.ParseThinkingType(args)
 			if err != nil {
-				qe.printf("Error: %v\n", err)
+				qe.logger.Errorf("Error: %v", err)
 				return nil
 			}
 			qe.thinkingConfig.Type = thinkType
@@ -667,34 +366,33 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 				qe.thinkingConfig.Enabled = false
 				qe.thinkingConfig.BudgetTokens = 0
 			}
-			qe.printf("Thinking set to: %s\n", thinkType)
+			qe.logger.Infof("Thinking set to: %s", thinkType)
 		}
 
 	case "fast":
 		_, args := slash.ParseCommand(input)
 		args = strings.TrimSpace(args)
 		if args == "" {
-			// Show current fast mode state
 			state := qe.fastModeManager.GetState()
-			qe.printf("Fast Mode: %s\n", state)
+			qe.logger.Infof("Fast Mode: %s", state)
 			if state == fastmode.StateCooldown {
 				remaining := qe.fastModeManager.TimeUntilCooldownEnd()
-				qe.printf("Cooldown remaining: %v\n", remaining)
+				qe.logger.Infof("Cooldown remaining: %v", remaining)
 			}
 		} else {
 			switch strings.ToLower(args) {
 			case "on", "enable":
 				qe.fastModeManager = fastmode.NewManager(true)
 				qe.fastModeManager.SetModel(qe.modelName)
-				qe.println("Fast mode enabled")
+				qe.logger.Info("Fast mode enabled")
 			case "off", "disable":
 				qe.fastModeManager.Disable()
-				qe.println("Fast mode disabled")
+				qe.logger.Info("Fast mode disabled")
 			case "status":
 				state := qe.fastModeManager.GetState()
-				qe.printf("Fast Mode: %s (model: %s)\n", state, qe.fastModeManager.GetModel())
+				qe.logger.Infof("Fast Mode: %s (model: %s)", state, qe.fastModeManager.GetModel())
 			default:
-				qe.printf("Unknown fast mode argument: %s. Use: on/off/status\n", args)
+				qe.logger.Warnf("Unknown fast mode argument: %s. Use: on/off/status", args)
 			}
 		}
 
@@ -702,24 +400,23 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 		_, args := slash.ParseCommand(input)
 		args = strings.TrimSpace(args)
 		if args == "" {
-			// Force snip now
 			snipResult := compact.SnipHistory(qe.messages, qe.snipConfig)
 			if snipResult != nil {
 				qe.messages = snipResult.Remaining
-				qe.printf("Snipped %d messages, %d remaining\n", snipResult.SnippedCount, len(snipResult.Remaining))
+				qe.logger.Infof("Snipped %d messages, %d remaining", snipResult.SnippedCount, len(snipResult.Remaining))
 			} else {
-				qe.println("No snip needed")
+				qe.logger.Info("No snip needed")
 			}
 		} else {
 			switch strings.ToLower(args) {
 			case "on", "enable":
 				qe.snipConfig.Enabled = true
-				qe.println("Snip enabled")
+				qe.logger.Info("Snip enabled")
 			case "off", "disable":
 				qe.snipConfig.Enabled = false
-				qe.println("Snip disabled")
+				qe.logger.Info("Snip disabled")
 			case "status":
-				qe.printf("Snip: enabled=%v, max_messages=%d, preserve=%d\n",
+				qe.logger.Infof("Snip: enabled=%v, max_messages=%d, preserve=%d",
 					qe.snipConfig.Enabled, qe.snipConfig.MaxMessages, qe.snipConfig.PreserveCount)
 			}
 		}
@@ -732,17 +429,17 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 			if qe.showToolUsageInReply {
 				state = "enabled"
 			}
-			qe.printf("Show tool usage in reply: %s\n", state)
+			qe.logger.Infof("Show tool usage in reply: %s", state)
 		} else {
 			switch strings.ToLower(args) {
 			case "on", "enable":
 				qe.showToolUsageInReply = true
-				qe.println("Tool usage will be shown in replies ✅")
+				qe.logger.Info("Tool usage will be shown in replies ✅")
 			case "off", "disable":
 				qe.showToolUsageInReply = false
-				qe.println("Tool usage hidden from replies")
+				qe.logger.Info("Tool usage hidden from replies")
 			default:
-				qe.printf("Unknown argument: %s. Use: on/off\n", args)
+				qe.logger.Warnf("Unknown argument: %s. Use: on/off", args)
 			}
 		}
 
@@ -754,23 +451,169 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 			if qe.showThinkingInLog {
 				state = "enabled"
 			}
-			qe.printf("Show thinking in log: %s\n", state)
+			qe.logger.Infof("Show thinking in log: %s", state)
 		} else {
 			switch strings.ToLower(args) {
 			case "on", "enable":
 				qe.showThinkingInLog = true
-				qe.println("Thinking will be logged ✅")
+				qe.logger.Info("Thinking will be logged ✅")
 			case "off", "disable":
 				qe.showThinkingInLog = false
-				qe.println("Thinking hidden from logs")
+				qe.logger.Info("Thinking hidden from logs")
 			default:
-				qe.printf("Unknown argument: %s. Use: on/off\n", args)
+				qe.logger.Warnf("Unknown argument: %s. Use: on/off", args)
 			}
 		}
 
+	case "sessions":
+		_, args := slash.ParseCommand(input)
+		args = strings.TrimSpace(args)
+		if err := qe.handleSessionsCommand(ctx, args); err != nil {
+			qe.logger.Errorf("Error listing sessions: %v", err)
+		}
+
+	case "resume":
+		_, args := slash.ParseCommand(input)
+		args = strings.TrimSpace(args)
+		if err := qe.handleResumeCommand(ctx, args); err != nil {
+			qe.logger.Errorf("Error resuming session: %v", err)
+		}
+
 	default:
-		qe.println(result.Output)
+		qe.logger.Info(result.Output)
 	}
+
+	return nil
+}
+
+// handleSessionsCommand handles the /sessions command to list available sessions
+func (qe *QueryEngine) handleSessionsCommand(ctx context.Context, args string) error {
+	// Parse optional search query
+	query := strings.TrimSpace(args)
+
+	// Ensure managers exist
+	if qe.transcriptProjectMgr == nil {
+		pm, err := transcript.NewProjectManager("")
+		if err != nil {
+			return fmt.Errorf("failed to create transcript manager: %w", err)
+		}
+		qe.transcriptProjectMgr = pm
+	}
+	if qe.sessionManager == nil {
+		sm, err := transcript.NewSessionManager("")
+		if err != nil {
+			return fmt.Errorf("failed to create session manager: %w", err)
+		}
+		qe.sessionManager = sm
+	}
+
+	var sessions []transcript.SessionSummary
+	var err error
+
+	if query != "" {
+		// Search sessions across all projects using SessionManager
+		sessions, err = qe.sessionManager.SearchSessions(query)
+		if err != nil {
+			return fmt.Errorf("failed to search sessions: %w", err)
+		}
+	} else {
+		// List sessions for current cwd with detailed summaries
+		sessions, err = qe.listSessionsWithSummary(qe.cwd)
+		if err != nil {
+			return fmt.Errorf("failed to list sessions: %w", err)
+		}
+	}
+
+	if len(sessions) == 0 {
+		qe.logger.Info("No previous sessions found.")
+		return nil
+	}
+
+	qe.logger.Infof("Found %d session(s):", len(sessions))
+	for _, s := range sessions {
+		// Build a rich one-line summary
+		summary := s.FormatSummary()
+		qe.logger.Infof("  %s", summary)
+	}
+	return nil
+}
+
+// listSessionsWithSummary returns SessionSummary for current working directory
+func (qe *QueryEngine) listSessionsWithSummary(cwd string) ([]transcript.SessionSummary, error) {
+	// Normalize cwd to project key
+	projectDir := normalizeSessionPath(cwd)
+	if projectDir == "" {
+		projectDir = "no-cwd"
+	}
+
+	// Use the sessionManager to get detailed summaries
+	if qe.sessionManager != nil {
+		summaries, err := qe.sessionManager.ListSessionsForCwd(projectDir)
+		if err == nil && len(summaries) > 0 {
+			return summaries, nil
+		}
+		// If no summaries for this cwd, try all sessions
+		all, err := qe.sessionManager.ListAllSessions()
+		if err == nil && len(all) > 0 {
+			return all, nil
+		}
+	}
+
+	// Fallback: use simple ListSessions and convert to minimal summaries
+	infos, err := qe.ListSessions()
+	if err != nil {
+		return nil, err
+	}
+	var summaries []transcript.SessionSummary
+	for _, info := range infos {
+		summaries = append(summaries, transcript.SessionSummary{
+			SessionID:  info.SessionID,
+			FilePath:   info.FilePath,
+			ProjectDir: projectDir,
+		})
+	}
+	return summaries, nil
+}
+
+// handleResumeCommand handles the /resume command to restore a previous session
+func (qe *QueryEngine) handleResumeCommand(ctx context.Context, args string) error {
+	sessionID := strings.TrimSpace(args)
+	if sessionID == "" {
+		// Interactive selection if multiple sessions exist
+		sessions, err := qe.ListSessions()
+		if err != nil {
+			return fmt.Errorf("failed to list sessions: %w", err)
+		}
+
+		if len(sessions) == 0 {
+			return fmt.Errorf("no previous sessions found")
+		}
+
+		if len(sessions) == 1 {
+			// Auto-resume the only session
+			sessionID = sessions[0].SessionID
+		} else {
+			// Multiple sessions - show list and ask user to specify
+			qe.logger.Infof("Multiple sessions found. Use /resume <session-id> to select:")
+			for i, s := range sessions {
+				if i >= 5 {
+					break // show top 5
+				}
+				qe.logger.Infof("  %s", s.SessionID)
+			}
+			return fmt.Errorf("please specify which session to resume")
+		}
+	}
+
+	// Resume specific session
+	err := qe.ResumeFromTranscript(sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to resume session %s: %w", sessionID, err)
+	}
+	qe.logger.Infof("✅ Resumed session: %s", qe.sessionID)
+
+	// Also show a brief summary
+	qe.logger.Infof("   Messages: %d, Turns: %d", len(qe.messages), qe.currentTurn)
 
 	return nil
 }
@@ -831,6 +674,42 @@ func (qe *QueryEngine) SetFastMode(enabled bool) {
 	}
 }
 
+// SetMaxTokens sets the maximum tokens for the model response
+func (qe *QueryEngine) SetMaxTokens(tokens int) {
+	if tokens > 0 {
+		qe.maxTokens = tokens
+	}
+}
+
+// SetQueryMaxTurns sets the per-query turn budget.
+// When > 0, each call to SubmitMessage or RunMainLoop resets currentTurn
+// to 0 and enforces this limit individually for that query.
+// When 0 (default), the session-wide maxTurns is used (accumulated across queries).
+// When set, reaching the limit triggers a grace turn where the model is asked
+// to summarize its findings before stopping cleanly.
+func (qe *QueryEngine) SetQueryMaxTurns(n int) {
+	qe.queryMaxTurns = n
+}
+
+// resetForNewQuery resets the turn counter for a new query and logs if verbose.
+// Called at the start of SubmitMessage and RunMainLoop when queryMaxTurns > 0.
+func (qe *QueryEngine) resetForNewQuery() {
+	if qe.queryMaxTurns > 0 {
+		qe.currentTurn = 0
+		qe.queryLimitGraceMode = false
+	}
+}
+
+// effectiveMaxTurns returns the turn limit to use for the current query.
+// If queryMaxTurns > 0, it returns queryMaxTurns + 1 (accounting for the grace turn).
+// Otherwise it returns the session-wide maxTurns.
+func (qe *QueryEngine) effectiveMaxTurns() int {
+	if qe.queryMaxTurns > 0 {
+		return qe.queryMaxTurns + 1 // +1 for the summary grace turn
+	}
+	return qe.maxTurns
+}
+
 // IsFastModeActive checks if fast mode is currently active
 func (qe *QueryEngine) IsFastModeActive() bool {
 	return qe.fastModeManager.IsActive()
@@ -853,67 +732,522 @@ func (qe *QueryEngine) ForceSnip() *compact.SnipResult {
 	return result
 }
 
-// buildToolCallSummary creates a human-readable summary of a tool call.
-func buildToolCallSummary(toolName string, input any) string {
-	inputMap, ok := input.(map[string]any)
-	if !ok {
-		return toolName
+// initTranscript initializes the transcript system for the current session.
+// If no transcriptFile is active, it creates one using the sessionID and cwd.
+func (qe *QueryEngine) initTranscript() {
+	if qe.transcriptFile != nil {
+		return
+	}
+	if qe.transcriptProjectMgr == nil {
+		pm, err := transcript.NewProjectManager("")
+		if err != nil {
+			if qe.verbose {
+				qe.logger.Debugf("[Transcript] Failed to create project manager: %v", err)
+			}
+			return
+		}
+		qe.transcriptProjectMgr = pm
+	}
+	if qe.sessionID == "" {
+		qe.sessionID = fmt.Sprintf("session-%d", time.Now().UnixMilli())
+	}
+	qe.transcriptFile = qe.transcriptProjectMgr.GetTranscriptFile(qe.sessionID, qe.cwd)
+	if qe.verbose {
+		qe.logger.Debugf("[Transcript] Initialized for session: %s", qe.sessionID)
+	}
+}
+
+// ResumeFromTranscript loads a previous session from its transcript file
+// and restores the conversation state (messages, turn count, etc.)
+func (qe *QueryEngine) ResumeFromTranscript(sessionID string) error {
+	if qe.transcriptProjectMgr == nil {
+		pm, err := transcript.NewProjectManager("")
+		if err != nil {
+			return fmt.Errorf("failed to create transcript manager: %w", err)
+		}
+		qe.transcriptProjectMgr = pm
 	}
 
-	switch toolName {
-	case "read_file":
-		if path, ok := inputMap["file_path"].(string); ok {
-			return fmt.Sprintf("读取 %s", path)
+	// If sessionID is empty, find the most recent session for this cwd
+	if sessionID == "" {
+		sessions, err := qe.transcriptProjectMgr.ListSessions()
+		if err != nil {
+			return fmt.Errorf("failed to list sessions: %w", err)
 		}
-	case "write_file":
-		if path, ok := inputMap["file_path"].(string); ok {
-			return fmt.Sprintf("写入 %s", path)
+		// Find the most recent session for this cwd
+		recentSession := qe.findMostRecentSessionForCwd(sessions, qe.cwd)
+		if recentSession == "" {
+			return fmt.Errorf("no previous sessions found for current working directory")
 		}
-	case "edit_file":
-		if path, ok := inputMap["file_path"].(string); ok {
-			return fmt.Sprintf("编辑 %s", path)
-		}
-	case "bash":
-		if cmd, ok := inputMap["command"].(string); ok {
-			if len(cmd) > 80 {
-				cmd = cmd[:80] + "…"
-			}
-			return fmt.Sprintf("执行命令: %s", cmd)
-		}
-	case "grep":
-		if pattern, ok := inputMap["pattern"].(string); ok {
-			if path, ok := inputMap["path"].(string); ok {
-				return fmt.Sprintf("搜索 %s (路径: %s)", pattern, path)
-			}
-			return fmt.Sprintf("搜索 %s", pattern)
-		}
-	case "glob":
-		if pattern, ok := inputMap["pattern"].(string); ok {
-			return fmt.Sprintf("查找文件 %s", pattern)
-		}
-	case "web_search":
-		if query, ok := inputMap["query"].(string); ok {
-			return fmt.Sprintf("搜索网络: %s", query)
-		}
-	case "web_fetch":
-		if url, ok := inputMap["url"].(string); ok {
-			if len(url) > 60 {
-				url = url[:60] + "…"
-			}
-			return fmt.Sprintf("获取网页: %s", url)
+		sessionID = recentSession
+		if qe.verbose {
+			qe.logger.Debugf("[Resume] Auto-selected most recent session: %s", sessionID)
 		}
 	}
 
-	// Generic: show first meaningful value
-	for k, v := range inputMap {
-		if s, ok := v.(string); ok && len(s) > 0 {
-			if len(s) > 60 {
-				s = s[:60] + "…"
+	tf := qe.transcriptProjectMgr.GetTranscriptFile(sessionID, qe.cwd)
+	info, err := tf.Replay()
+	if err != nil {
+		return fmt.Errorf("failed to replay transcript: %w", err)
+	}
+
+	// Convert transcript records back to messages
+	messages, turns, err := qe.convertTranscriptToMessages(info.Records)
+	if err != nil {
+		return fmt.Errorf("failed to convert transcript: %w", err)
+	}
+
+	// Restore state
+	qe.messages = messages
+	qe.currentTurn = turns
+	qe.sessionID = sessionID
+	qe.transcriptFile = tf
+
+	if qe.verbose {
+		qe.logger.Debugf("[Resume] Restored session: %s — %d messages, %d turns, %d user, %d assistant, %d tool calls, %d tool results",
+			sessionID, len(messages), turns,
+			info.Stats.UserMessages, info.Stats.AssistantMessages,
+			info.Stats.ToolCalls, info.Stats.ToolResults)
+	}
+
+	// Extract metadata (e.g., model, thinking config if stored)
+	if info.Stats.MetadataEntries > 0 {
+		qe.restoreTranscriptMetadata(tf)
+	}
+
+	return nil
+}
+
+// findMostRecentSessionForCwd finds the most recent session ID for a given cwd
+func (qe *QueryEngine) findMostRecentSessionForCwd(sessions []transcript.SessionInfo, targetCwd string) string {
+	// Normalize target cwd for matching
+	targetNormalized := normalizeSessionPath(targetCwd)
+
+	var best transcript.SessionInfo
+	var bestTime int64
+
+	for _, s := range sessions {
+		// Match by project path
+		if normalizeSessionPath(s.ProjectPath) == targetNormalized {
+			// Try to get file mod time
+			if info, err := os.Stat(s.FilePath); err == nil {
+				mt := info.ModTime().UnixMilli()
+				if mt > bestTime {
+					best = s
+					bestTime = mt
+				}
+			} else {
+				// Fall back: just pick the first match
+				if best.SessionID == "" {
+					best = s
+				}
 			}
-			return fmt.Sprintf("%s(%s=%s)", toolName, k, s)
 		}
 	}
-	return toolName
+
+	if best.SessionID == "" {
+		return ""
+	}
+	return best.SessionID
+}
+
+// normalizeSessionPath converts a cwd to the same format used in transcript.ProjectManager
+func normalizeSessionPath(cwd string) string {
+	if cwd == "" {
+		return "no-cwd"
+	}
+	// Match the sanitize logic from transcript.project.go
+	home, _ := os.UserHomeDir()
+	if strings.HasPrefix(cwd, home) {
+		cwd = strings.TrimPrefix(cwd, home)
+		cwd = "~" + cwd
+	}
+	return cwd
+}
+
+// restoreTranscriptMetadata reads metadata from transcript and restores engine settings
+func (qe *QueryEngine) restoreTranscriptMetadata(tf *transcript.TranscriptFile) {
+	meta, err := tf.ReadMetadata()
+	if err != nil {
+		if qe.verbose {
+			qe.logger.Debugf("[Resume] Failed to read metadata: %v", err)
+		}
+		return
+	}
+
+	if model, ok := meta[string(transcript.MetadataLastPrompt)]; ok {
+		_ = model // could restore model if stored
+	}
+
+	if qe.verbose {
+		count := len(meta)
+		qe.logger.Debugf("[Resume] Restored %d metadata entries", count)
+	}
+}
+
+// convertTranscriptToMessages converts transcript records into API messages
+func (qe *QueryEngine) convertTranscriptToMessages(records []transcript.TranscriptRecord) ([]api.MessageParam, int, error) {
+	var messages []api.MessageParam
+	turns := 0
+
+	for _, r := range records {
+		if r.IsSidechain {
+			continue
+		}
+
+		switch r.Type {
+		case transcript.MessageTypeUser:
+			var content any = r.Content
+			// Try to parse as structured content blocks
+			var blocks []api.ContentBlockParam
+			if err := json.Unmarshal([]byte(r.Content), &blocks); err == nil && len(blocks) > 0 {
+				content = blocks
+			}
+			msg := api.MessageParam{
+				Role:    "user",
+				Content: content,
+			}
+			messages = append(messages, msg)
+
+		case transcript.MessageTypeAssistant:
+			var contentBlocks []api.ContentBlockParam
+
+			// Try to parse structured content
+			var blocks []api.ContentBlockParam
+			if r.Content != "" {
+				if err := json.Unmarshal([]byte(r.Content), &blocks); err == nil && len(blocks) > 0 {
+					contentBlocks = blocks
+				} else {
+					// Plain text content
+					if r.Content != "" {
+						contentBlocks = append(contentBlocks, api.ContentBlockParam{
+							Type: "text",
+							Text: r.Content,
+						})
+					}
+				}
+			}
+
+			if len(contentBlocks) > 0 {
+				msg := api.MessageParam{
+					Role:    "assistant",
+					Content: contentBlocks,
+				}
+				messages = append(messages, msg)
+				turns++
+			}
+
+		case transcript.MessageTypeMetadata:
+			// Skip metadata, handled separately
+			continue
+
+		default:
+			// Handle tool results that might be standalone records
+			if r.ToolUseID != "" && r.Content != "" {
+				// This is a tool_result record
+				isError := strings.HasPrefix(r.Content, "Error:") || strings.HasPrefix(r.Content, "{\"error\"")
+				msg := api.MessageParam{
+					Role: "user",
+					Content: []api.ContentBlockParam{
+						{
+							Type:      "tool_result",
+							ToolUseID: r.ToolUseID,
+							Content: []api.ContentBlockParam{
+								{Type: "text", Text: r.Content},
+							},
+							IsError: isError,
+						},
+					},
+				}
+				messages = append(messages, msg)
+			}
+		}
+	}
+
+	return messages, turns, nil
+}
+
+// RecordMessageToTranscript records a message to the transcript file
+func (qe *QueryEngine) RecordMessageToTranscript(msgType transcript.MessageType, role string, contentBytes []byte) {
+	qe.initTranscript()
+	if qe.transcriptFile == nil {
+		return
+	}
+
+	contentStr := string(contentBytes)
+
+	record := transcript.TranscriptRecord{
+		Type:      msgType,
+		UUID:      fmt.Sprintf("msg-%d-%d", time.Now().UnixMilli(), len(qe.messages)),
+		SessionID: qe.sessionID,
+		Cwd:       qe.cwd,
+		Version:   transcript.TranscriptVersion,
+		GitBranch: qe.getGitBranch(),
+		Timestamp: time.Now().UnixMilli(),
+		Role:      role,
+		Content:   contentStr,
+	}
+
+	qe.transcriptFile.Queue(record)
+}
+
+// RecordToolCallToTranscript records a tool call to the transcript
+func (qe *QueryEngine) RecordToolCallToTranscript(toolUseID, toolName string, input map[string]any) {
+	qe.initTranscript()
+	if qe.transcriptFile == nil {
+		return
+	}
+
+	inputJSON, _ := json.Marshal(input)
+
+	record := transcript.TranscriptRecord{
+		Type:      transcript.MessageTypeAssistant,
+		UUID:      fmt.Sprintf("tool-use-%s", toolUseID),
+		SessionID: qe.sessionID,
+		Cwd:       qe.cwd,
+		Version:   transcript.TranscriptVersion,
+		GitBranch: qe.getGitBranch(),
+		Timestamp: time.Now().UnixMilli(),
+		Role:      "assistant",
+		Content:   string(inputJSON),
+		ToolUseID: toolUseID,
+		ToolName:  toolName,
+	}
+
+	qe.transcriptFile.Queue(record)
+}
+
+// RecordToolResultToTranscript records a tool result to the transcript
+func (qe *QueryEngine) RecordToolResultToTranscript(toolUseID, toolName, resultContent string, isError bool) {
+	qe.initTranscript()
+	if qe.transcriptFile == nil {
+		return
+	}
+
+	prefix := ""
+	if isError {
+		prefix = "Error: "
+	}
+
+	record := transcript.TranscriptRecord{
+		Type:      "tool_result",
+		UUID:      fmt.Sprintf("tool-result-%s", toolUseID),
+		SessionID: qe.sessionID,
+		Cwd:       qe.cwd,
+		Version:   transcript.TranscriptVersion,
+		GitBranch: qe.getGitBranch(),
+		Timestamp: time.Now().UnixMilli(),
+		Role:      "user",
+		Content:   prefix + resultContent,
+		ToolUseID: toolUseID,
+		ToolName:  toolName,
+	}
+
+	qe.transcriptFile.Queue(record)
+}
+
+// FlushTranscript ensures all pending transcript records are written to disk
+func (qe *QueryEngine) FlushTranscript() {
+	if qe.transcriptFile != nil {
+		if err := qe.transcriptFile.Flush(); err != nil && qe.verbose {
+			qe.logger.Debugf("[Transcript] Flush error: %v", err)
+		}
+	}
+}
+
+// GetTranscriptFile returns the current transcript file for external use
+func (qe *QueryEngine) GetTranscriptFile() *transcript.TranscriptFile {
+	qe.initTranscript()
+	return qe.transcriptFile
+}
+
+// GetSessionID returns the current session ID
+func (qe *QueryEngine) GetSessionID() string {
+	return qe.sessionID
+}
+
+// ListSessions lists all sessions for the current working directory
+func (qe *QueryEngine) ListSessions() ([]transcript.SessionInfo, error) {
+	if qe.transcriptProjectMgr == nil {
+		pm, err := transcript.NewProjectManager("")
+		if err != nil {
+			return nil, err
+		}
+		qe.transcriptProjectMgr = pm
+	}
+
+	sessions, err := qe.transcriptProjectMgr.ListSessions()
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter to only sessions for this cwd
+	targetNormalized := normalizeSessionPath(qe.cwd)
+	var filtered []transcript.SessionInfo
+	for _, s := range sessions {
+		if normalizeSessionPath(s.ProjectPath) == targetNormalized {
+			filtered = append(filtered, s)
+		}
+	}
+
+	return filtered, nil
+}
+
+// getGitBranch returns the current git branch (if applicable)
+func (qe *QueryEngine) getGitBranch() string {
+	// Simple fallback — can be enhanced with actual git parsing
+	return ""
+}
+
+// initMemoryIndex scans the memory directory, reads all memory files,
+// generates LLM embeddings, and populates the semantic index.
+// Safe to call multiple times (uses sync.Once internally).
+func (qe *QueryEngine) initMemoryIndex(ctx context.Context) {
+	qe.memoryInitOnce.Do(func() {
+		if !memory.IsAutoMemoryEnabled() {
+			return
+		}
+
+		// Read MEMORY.md to get the index
+		entryPoint := memory.GetAutoMemEntrypoint()
+		indexContent, err := os.ReadFile(entryPoint)
+		if err != nil || len(strings.TrimSpace(string(indexContent))) == 0 {
+			if qe.verbose {
+				qe.logger.Debug("[Memory index is empty — skipping semantic embedding initialization]")
+			}
+			return
+		}
+
+		// Parse index entries to get filenames
+		indexEntries := parseMemoryIndexLinks(string(indexContent))
+		if len(indexEntries) == 0 {
+			if qe.verbose {
+				qe.logger.Debug("[Memory index has no entries — skipping semantic embedding initialization]")
+			}
+			return
+		}
+
+		// Scan memory files and build index entries
+		headers, err := memory.ScanMemoryFiles(qe.memoryDir)
+		if err != nil {
+			if qe.verbose {
+				qe.logger.Debugf("[Memory scan failed: %v — skipping semantic embedding]", err)
+			}
+			return
+		}
+
+		relevant, err := core.Ingest(headers)
+		if err != nil {
+			if qe.verbose {
+				qe.logger.Debugf("[Memory ingest failed: %v — skipping semantic embedding]", err)
+			}
+			return
+		}
+
+		if len(relevant) == 0 {
+			return
+		}
+
+		// Cap memories to embed per batch
+		maxMemories := len(relevant)
+		if maxMemories > semantic.MaxMemoriesToEmbed {
+			maxMemories = semantic.MaxMemoriesToEmbed
+			if qe.verbose {
+				qe.logger.Debugf("[Memory limit hit: truncating to %d memories for embedding]", maxMemories)
+			}
+		}
+
+		// Build index entries and generate embeddings
+		var entries []semantic.IndexEntry
+		for i := 0; i < maxMemories; i++ {
+			m := relevant[i]
+			// Determine name from path
+			name := m.Path
+			if idx := strings.LastIndex(name, "/"); idx >= 0 {
+				name = name[idx+1:]
+			}
+			name = strings.TrimSuffix(name, ".md")
+
+			// Find matching header for description
+			var desc string
+			for _, h := range headers {
+				if h.FilePath == m.Path {
+					desc = h.Description
+					break
+				}
+			}
+
+			// Generate embedding via LLM (skip on error to keep system resilient)
+			embedText := fmt.Sprintf("%s: %s\n%s", name, desc, m.Content)
+			if len(embedText) > 3000 {
+				embedText = embedText[:3000]
+			}
+
+			vec, err := semantic.GenerateEmbedding(ctx, qe.client, embedText, semantic.DefaultEmbeddingDim)
+			if err != nil {
+				if qe.verbose {
+					qe.logger.Debugf("[Failed to embed memory %s: %v]", name, err)
+				}
+				// Still add without embedding — will use keyword fallback
+			}
+
+			entries = append(entries, semantic.IndexEntry{
+				Path:        m.Path,
+				Name:        name,
+				Description: desc,
+				Content:     m.Content,
+				Embedding:   vec,
+				MtimeMs:     m.MtimeMs,
+			})
+		}
+
+		qe.memoryIndex.AddEntries(entries)
+		if qe.verbose {
+			qe.logger.Debugf("[Semantic memory index initialized: %d entries]", len(entries))
+		}
+	})
+}
+
+// tryCompactMemory checks if memory compaction is needed and performs it.
+// It's designed to run once per session (on first SubmitMessage/RunMainLoop).
+func (qe *QueryEngine) tryCompactMemory(ctx context.Context) {
+	if qe.memoryCompacted || !memory.IsAutoMemoryEnabled() || qe.memoryCompactor == nil {
+		return
+	}
+	qe.memoryCompacted = true
+
+	memoryDir := qe.memoryDir
+	if memoryDir != "" && qe.memoryCompactor.Enabled {
+		res, err := compactmem.CompactIfNeeded(ctx, qe.client, memoryDir, qe.memoryCompactor)
+		if err != nil {
+			if qe.verbose {
+				qe.logger.Debugf("[Memory compaction failed: %v]", err)
+			}
+		} else if res != nil {
+			if qe.verbose {
+				qe.logger.Debugf("[Memory compaction: %d -> %d files]", res.OriginalCount, res.NewCount)
+			}
+		}
+	}
+}
+
+// parseMemoryIndexLinks parses the MEMORY.md index and extracts
+// filenames from markdown links like `- [title](file.md) — desc`.
+func parseMemoryIndexLinks(content string) []string {
+	var results []string
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "- [") {
+			continue
+		}
+		start := strings.Index(line, "](")
+		end := strings.Index(line, ")")
+		if start >= 0 && end > start+2 {
+			filename := line[start+2 : end]
+			results = append(results, filename)
+		}
+	}
+	return results
 }
 
 // BuildSystemPrompt builds the system prompt with tool descriptions

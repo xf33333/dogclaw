@@ -10,6 +10,7 @@ type Config struct {
 	Model                string
 	BaseURL              string
 	MaxTurns             int
+	MaxTokens            int
 	MaxBudgetUSD         float64
 	PermissionMode       types.PermissionMode
 	Verbose              bool
@@ -25,6 +26,7 @@ func DefaultConfig() *Config {
 		Model:          "qwen/qwen3.6-plus:free",
 		BaseURL:        "https://",
 		MaxTurns:       1000,
+		MaxTokens:      8192,
 		PermissionMode: types.PermissionModeDefault,
 		Cwd:            ".",
 	}
@@ -42,6 +44,7 @@ func ConfigFromSettings(s *Settings) (*Config, error) {
 	cfg.Model = active.Model
 	cfg.BaseURL = active.URL
 	cfg.MaxTurns = s.MaxTurns
+	cfg.MaxTokens = s.MaxTokens
 	cfg.MaxBudgetUSD = s.MaxBudgetUSD
 	cfg.PermissionMode = types.PermissionMode(s.PermissionMode)
 	cfg.Verbose = s.Verbose

@@ -203,6 +203,24 @@ func RegisterBuiltinCommands(registry *CommandRegistry) {
 		Source:      "builtin",
 		Handler:     HandleMaxTurns,
 	})
+
+	registry.Register(&Command{
+		Name:        "sessions",
+		Aliases:     []string{"ls", "session"},
+		Description: "List or search sessions",
+		Type:        LocalCommand,
+		Source:      "builtin",
+		Handler:     HandleSessions,
+	})
+
+	registry.Register(&Command{
+		Name:        "resume",
+		Aliases:     []string{"r"},
+		Description: "Resume a previous session",
+		Type:        LocalCommand,
+		Source:      "builtin",
+		Handler:     HandleResume,
+	})
 }
 
 // HandleHelp shows available commands
@@ -291,5 +309,21 @@ func HandleMaxTurns(ctx context.Context, args string) (*CommandResult, error) {
 
 	return &CommandResult{
 		Output: fmt.Sprintf("Max turns set to: %s", args),
+	}, nil
+}
+
+// HandleSessions handles /sessions command - actual logic in engine.handleSessionsCommand
+func HandleSessions(ctx context.Context, args string) (*CommandResult, error) {
+	// Just acknowledge - engine.handleSlashCommand will do the actual work
+	return &CommandResult{
+		Output: "", // empty output, engine will write logs
+	}, nil
+}
+
+// HandleResume handles /resume command - actual logic in engine.handleResumeCommand
+func HandleResume(ctx context.Context, args string) (*CommandResult, error) {
+	// Just acknowledge - engine.handleSlashCommand will do the actual work
+	return &CommandResult{
+		Output: "", // empty output, engine will write logs
 	}, nil
 }

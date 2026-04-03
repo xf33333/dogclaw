@@ -1,0 +1,1377 @@
+package query
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+
+	"dogclaw/internal/api"
+	"dogclaw/internal/logger"
+	"dogclaw/pkg/claudemd"
+	"dogclaw/pkg/compact"
+	ctxpkg "dogclaw/pkg/context"
+	"dogclaw/pkg/memory"
+	"dogclaw/pkg/slash"
+	"dogclaw/pkg/transcript"
+	"dogclaw/pkg/types"
+	"dogclaw/pkg/usage"
+)
+
+// verboseLogLimit is the maximum length of a single content block in verbose output.
+const verboseLogLimit = 2000
+
+// formatTruncated returns s truncated to n characters, with "..." appended if truncated.
+func formatTruncated(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
+// parsedToolCall represents a tool call extracted from text
+type parsedToolCall struct {
+	ID      string
+	Name    string
+	Command string
+}
+
+// parseToolUseFromText extracts <function=...> tags from text and returns tool calls.
+// Supports formats like: <function=Bash command="..."> or <function=Read file="...">
+func parseToolUseFromText(text string) []parsedToolCall {
+	var calls []parsedToolCall
+	// Regex to find <function=Name ...> (may have newlines before)
+	re := regexp.MustCompile(`<function=(\w+)(?:\s+[^>]*)?>`)
+	matches := re.FindAllStringSubmatch(text, -1)
+	for _, m := range matches {
+		toolName := m[1]
+		// Extract the entire tag to parse attributes
+		fullTag := m[0]
+		// Extract command or other relevant attribute
+		cmdRe := regexp.MustCompile(`command="([^"]*)"`)
+		cmdMatches := cmdRe.FindStringSubmatch(fullTag)
+		if len(cmdMatches) < 2 {
+			// Also try single quotes
+			cmdRe2 := regexp.MustCompile(`command='([^']*)'`)
+			cmdMatches2 := cmdRe2.FindStringSubmatch(fullTag)
+			if len(cmdMatches2) >= 2 {
+				calls = append(calls, parsedToolCall{
+					ID:      fmt.Sprintf("toolspec-%d", time.Now().UnixNano()),
+					Name:    toolName,
+					Command: cmdMatches2[1],
+				})
+				continue
+			}
+			// Skip if no command
+			continue
+		}
+		calls = append(calls, parsedToolCall{
+			ID:      fmt.Sprintf("toolspec-%d", time.Now().UnixNano()),
+			Name:    toolName,
+			Command: cmdMatches[1],
+		})
+	}
+	return calls
+}
+
+// extractTextBeforeToolUse removes any <function=...> tags and returns only the natural text part.
+func extractTextBeforeToolUse(text string) string {
+	idx := strings.Index(text, "<function=")
+	if idx == -1 {
+		return text
+	}
+	return strings.TrimSpace(text[:idx])
+}
+
+// dumpMessageRequest prints the request details in verbose mode.
+func (qe *QueryEngine) dumpMessageRequest(req *api.MessageRequest) {
+	qe.logger.Infoln("═══════════════════════ LLM Request ═══════════════════════")
+	qe.logger.Infof("Model:     %s", req.Model)
+	qe.logger.Infof("MaxTokens: %d", req.MaxTokens)
+	if req.Thinking != nil {
+		qe.logger.Infof("Thinking:  %s (budget=%d)", req.Thinking.Type, req.Thinking.BudgetTokens)
+	}
+	qe.logger.Infof("Messages:  %d", len(req.Messages))
+
+	// Print system prompt (truncated)
+	switch sys := req.System.(type) {
+	case string:
+		qe.logger.Infof("\n--- System Prompt (%d chars) ---\n%s\n--- End System Prompt ---\n\n",
+			len(sys), formatTruncated(sys, verboseLogLimit))
+	case []api.SystemBlock:
+		for i, block := range sys {
+			qe.logger.Infof("\n--- System Block [%d] (%d chars) ---\n%s\n--- End System Block ---\n\n",
+				i, len(block.Text), formatTruncated(block.Text, verboseLogLimit))
+		}
+	}
+
+	// Print each message
+	for i, msg := range req.Messages {
+		contentStr := messageContentToString(msg.Content)
+		qe.logger.Infof("[%d] role=%s (%d chars): %s",
+			i, msg.Role, len(contentStr), formatTruncated(contentStr, verboseLogLimit))
+	}
+
+	// Print tool names
+	if len(req.Tools) > 0 {
+		var toolNames []string
+		for _, t := range req.Tools {
+			toolNames = append(toolNames, t.Name)
+		}
+		qe.logger.Infof("Tools: [%s]", strings.Join(toolNames, ", "))
+	}
+
+	// Print memory summary
+	if ms := req.MemorySummary; ms != nil {
+		flag := ""
+		if ms.AutoMemPrompt {
+			flag = " +auto-mem-prompt"
+		}
+		qe.logger.Infof("Memory:         %d files%s", ms.TotalFiles, flag)
+		if len(ms.ClaudeMDFiles) > 0 {
+			qe.logger.Infof("  ClaudeMDFiles:  [%s]", strings.Join(ms.ClaudeMDFiles, ", "))
+		}
+		if len(ms.SemanticHits) > 0 {
+			qe.logger.Infof("  SemanticHits:   [%s]", strings.Join(ms.SemanticHits, ", "))
+		}
+	}
+
+	qe.logger.Infoln("═══════════════════════ End Request ═══════════════════════")
+}
+
+// dumpMessageResponse prints the response details in verbose mode.
+func (qe *QueryEngine) dumpMessageResponse(resp *api.MessageResponse) {
+	qe.logger.Infoln("═══════════════════════ LLM Response ══════════════════════")
+	qe.logger.Infof("ID:         %s", resp.ID)
+	qe.logger.Infof("Model:      %s", resp.Model)
+	qe.logger.Infof("StopReason: %s", resp.StopReason)
+	qe.logger.Infof("Usage:      input=%d output=%d cache_create=%d cache_read=%d",
+		resp.Usage.InputTokens, resp.Usage.OutputTokens,
+		resp.Usage.CacheCreationInputTokens, resp.Usage.CacheReadInputTokens)
+
+	for i, block := range resp.Content {
+		switch block.Type {
+		case "text":
+			qe.logger.Infof("\n--- Content [%d] type=text (%d chars) ---\n%s\n--- End Content ---\n\n",
+				i, len(block.Text), formatTruncated(block.Text, verboseLogLimit))
+		case "tool_use":
+			inputJSON, _ := json.Marshal(block.Input)
+			qe.logger.Infof("[%d] type=tool_use name=%s id=%s input=%s",
+				i, block.Name, block.ID, formatTruncated(string(inputJSON), verboseLogLimit))
+		case "thinking":
+			if qe.showThinkingInLog {
+				qe.logger.Infof("\n--- Content [%d] type=thinking (%d chars) ---\n%s\n--- End Content ---\n\n",
+					i, len(block.Text), formatTruncated(block.Text, verboseLogLimit))
+			} else {
+				qe.logger.Infof("[%d] type=thinking (%d chars, hidden)", i, len(block.Text))
+			}
+		default:
+			qe.logger.Infof("[%d] type=%s", i, block.Type)
+		}
+	}
+	qe.logger.Infoln("═══════════════════════ End Response ══════════════════════")
+}
+
+// messageContentToString converts a message content field to a string for display.
+func messageContentToString(content any) string {
+	switch v := content.(type) {
+	case string:
+		return v
+	case []api.ContentBlockParam:
+		var parts []string
+		for _, b := range v {
+			switch b.Type {
+			case "text":
+				parts = append(parts, b.Text)
+			case "tool_use":
+				inputJSON, _ := json.Marshal(b.Input)
+				parts = append(parts, fmt.Sprintf("[tool_use:%s]", b.Name))
+				_ = inputJSON
+			case "tool_result":
+				if textBlocks, ok := b.Content.([]api.ContentBlockParam); ok {
+					for _, tb := range textBlocks {
+						if tb.Type == "text" {
+							parts = append(parts, fmt.Sprintf("[tool_result:%s]", formatTruncated(tb.Text, 200)))
+						}
+					}
+				}
+			}
+		}
+		return strings.Join(parts, "\n")
+	default:
+		return fmt.Sprintf("%v", content)
+	}
+}
+
+// SubmitMessage processes a user message and runs the tool call loop
+func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
+	// Clear previous assistant text for this new turn
+	qe.lastAssistantText = ""
+
+	// One-time memory initialization (semantic index + compaction)
+	qe.initMemoryIndex(ctx)
+	qe.tryCompactMemory(ctx)
+
+	// Check if this is a slash command
+	if slash.IsSlashCommand(prompt) {
+		return qe.handleSlashCommand(ctx, prompt)
+	}
+
+	// Add to history
+	qe.historyMgr.AddSimpleHistory(prompt)
+
+	// Add user message
+	userMsg := api.MessageParam{
+		Role:    "user",
+		Content: prompt,
+	}
+	qe.messages = append(qe.messages, userMsg)
+
+	// Record to transcript
+	qe.RecordMessageToTranscript(transcript.MessageTypeUser, "user", []byte(prompt))
+
+	// Reset turn counter for per-query budget
+	qe.resetForNewQuery()
+
+	// Main query loop
+	for qe.currentTurn < qe.effectiveMaxTurns() {
+		qe.currentTurn++
+
+		// Query limit grace mode: if we've exceeded the per-query budget
+		// (currentTurn > queryMaxTurns but < effectiveMaxTurns which includes +1),
+		// inject a system-directing user message asking for a summary.
+		if qe.queryMaxTurns > 0 && qe.currentTurn > qe.queryMaxTurns && !qe.queryLimitGraceMode {
+			qe.queryLimitGraceMode = true
+			qe.logger.Infof("[⏱️ Query reached max turns (%d) — requesting summary turn]", qe.queryMaxTurns)
+			qe.messages = append(qe.messages, api.MessageParam{
+				Role:    "user",
+				Content: "You have reached the maximum number of turns for this query. Please do NOT make any more tool calls. Instead, provide a concise summary of your findings and conclusions based on the information gathered so far.",
+			})
+		}
+
+		// After grace turn, if the model still calls tools, stop immediately
+		if qe.queryMaxTurns > 0 && qe.queryLimitGraceMode && qe.currentTurn > qe.queryMaxTurns+1 {
+			if qe.verbose {
+				qe.logger.Debug("[Grace turn exceeded — forcing stop]")
+			}
+			return fmt.Errorf("reached maximum turns for query (%d)", qe.queryMaxTurns)
+		}
+
+		maxTurnLabel := qe.effectiveMaxTurns()
+		if qe.verbose {
+			qe.logger.Debugf("[Turn %d/%d]", qe.currentTurn, maxTurnLabel)
+		}
+
+		// Check if auto-compact is needed
+		if qe.compactConfig.Enabled {
+			shouldCompact, tokenCount, threshold := compact.CheckAutoCompact(qe.messages, qe.compactConfig, qe.compactTracker)
+			if shouldCompact {
+				if qe.verbose {
+					qe.logger.Debugf("[Auto-compact triggered: %d tokens >= threshold %d]", tokenCount, threshold)
+				}
+				result, err := compact.CompactMessages(ctx, qe.client, qe.messages, qe.systemPrompt, qe.compactConfig)
+				if err != nil {
+					qe.logger.Errorf("[Auto-compact error: %v]", err)
+				} else if result != nil {
+					qe.messages = compact.ApplyCompactResult(qe.messages, result)
+					qe.compactTracker.Compacted = true
+					qe.compactTracker.TurnCounter++
+					if qe.verbose {
+						qe.logger.Debugf("[Auto-compact complete: %d -> %d messages, %d -> %d tokens]",
+							result.OriginalMessageCount, result.CompactedMessageCount,
+							result.PreCompactTokenCount, result.PostCompactTokenCount)
+					}
+				}
+			} else {
+				// Check for warning state
+				warning, isBlocking := compact.GetWarningState(tokenCount, qe.compactConfig)
+				if warning != "" {
+					qe.logger.Warn(warning)
+				}
+				if isBlocking {
+					return fmt.Errorf("context window is full (blocking limit reached). Please start a new conversation.")
+				}
+			}
+		}
+
+		// Check if snip is needed (aggressive message count reduction)
+		if qe.snipConfig.Enabled {
+			snipResult := compact.SnipHistory(qe.messages, qe.snipConfig)
+			if snipResult != nil {
+				if qe.verbose {
+					qe.logger.Debugf("[Snip: removed %d messages, %d remaining]",
+						snipResult.SnippedCount, len(snipResult.Remaining))
+				}
+				qe.messages = snipResult.Remaining
+			}
+		}
+
+		// Build full system prompt with context
+		fullSystemPrompt, memSummary := qe.buildFullSystemPrompt()
+
+		// Build API request
+		req := &api.MessageRequest{
+			Model:         qe.client.Model,
+			MaxTokens:     qe.maxTokens,
+			System:        fullSystemPrompt,
+			Messages:      qe.messages,
+			Tools:         qe.toAPITools(),
+			MemorySummary: memSummary,
+		}
+
+		// Configure thinking based on current settings
+		if qe.thinkingConfig.Enabled {
+			if qe.thinkingConfig.Type == "adaptive" {
+				req.Thinking = &api.ThinkingConfig{
+					Type: "enabled",
+				}
+			} else {
+				req.Thinking = &api.ThinkingConfig{
+					Type:         "enabled",
+					BudgetTokens: qe.thinkingConfig.BudgetTokens,
+				}
+			}
+		} else {
+			req.Thinking = &api.ThinkingConfig{
+				Type: "disabled",
+			}
+		}
+
+		// Use fast mode model if active
+		if qe.fastModeManager.IsActive() {
+			req.Model = qe.fastModeManager.GetModel()
+		}
+		// Dump request/response in verbose mode
+		if qe.verbose {
+			qe.dumpMessageRequest(req)
+			qe.logger.Debug("dumpMessageRequest1")
+		}
+
+		// Call API
+		resp, err := qe.client.SendMessage(ctx, req)
+		if err == nil && qe.verbose {
+			qe.dumpMessageResponse(resp)
+			qe.logger.Debug("dumpMessageResponse1")
+		}
+		if err != nil {
+			// Handle context deadline exceeded (timeout) — retry with compacted messages
+			if isTimeoutError(err) {
+				recovered, retryErr := qe.tryRecoverFromTimeout(ctx, err)
+				if recovered {
+					qe.logger.Warn("[⏱️  Recovered from timeout — retrying with reduced context]")
+					continue
+				}
+				if retryErr != nil {
+					qe.FlushTranscript()
+					return retryErr
+				}
+				// Recovery failed (snip/compact couldn't help).
+				// Flush transcript and return gracefully so user can /resume.
+				qe.FlushTranscript()
+				if len(qe.messages) > 0 {
+					qe.logger.Warn("[⚠️  超时无法自动恢复，已保存当前会话快照，稍后可使用 /resume 恢复]")
+					return nil
+				}
+				return fmt.Errorf("API timeout unrecoverable: %w", err)
+			}
+			// Try to recover from context length exceeded errors
+			recovered, recoveryErr := qe.tryRecoverFromContextExceeded(ctx, err)
+			if recovered {
+				qe.logger.Warn("[🔄 Recovered from context length exceeded error]")
+				continue // Retry with compacted messages
+			}
+			if recoveryErr != nil {
+				return recoveryErr
+			}
+			return fmt.Errorf("API error: %w", err)
+		}
+
+		// Track usage from response
+		if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
+			tokenUsage := usage.TokenUsage{
+				InputTokens:              resp.Usage.InputTokens,
+				OutputTokens:             resp.Usage.OutputTokens,
+				CacheReadInputTokens:     resp.Usage.CacheReadInputTokens,
+				CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
+			}
+			qe.usageTracker.Add(tokenUsage)
+
+			// Update cost
+			pricing := usage.GetPricingForModel(qe.modelName)
+			qe.currentCost = qe.usageTracker.CalculateCost(pricing)
+
+			// Check budget
+			if qe.maxBudgetUSD > 0 && qe.currentCost >= qe.maxBudgetUSD {
+				return fmt.Errorf("reached maximum budget ($%.2f)", qe.maxBudgetUSD)
+			}
+		}
+
+		// Build assistant message content blocks
+		var assistantContent []api.ContentBlockParam
+		var toolUseDetails []string
+
+		// Process response - add text content and capture thinking
+		// Also keep track of raw text for fallback tool extraction
+		var rawTextBlocks []string
+		for _, block := range resp.Content {
+			if block.Type == "text" && block.Text != "" {
+				assistantContent = append(assistantContent, api.ContentBlockParam{
+					Type: "text",
+					Text: block.Text,
+				})
+				rawTextBlocks = append(rawTextBlocks, block.Text)
+			}
+			if block.Type == "thinking" && block.Text != "" {
+				if qe.showThinkingInLog {
+					qe.logger.Infof("[🧠 Thinking (%d chars)]\n%s\n[End Thinking]", len(block.Text), block.Text)
+				}
+			}
+		}
+
+		// Check for tool calls
+		var toolUseBlocks []api.ContentBlock
+		for _, block := range resp.Content {
+			if block.Type == "tool_use" {
+				toolUseBlocks = append(toolUseBlocks, block)
+			}
+		}
+
+		// Fallback: if no tool_use blocks but text contains <function=...> tags,
+		// parse them and create tool_use blocks manually.
+		if len(toolUseBlocks) == 0 {
+			for _, text := range rawTextBlocks {
+				extracted := parseToolUseFromText(text)
+				if len(extracted) > 0 {
+					// Convert to api.ContentBlock
+					for _, bc := range extracted {
+						toolUseBlocks = append(toolUseBlocks, api.ContentBlock{
+							Type: "tool_use",
+							ID:   bc.ID,
+							Name: bc.Name,
+							Input: map[string]any{
+								"command": bc.Command,
+							},
+						})
+					}
+					// Remove the tool call part from the corresponding text block
+					// (simplified: we'll just trim everything after first <function=...)
+					break // only process first text block for now
+				}
+			}
+		}
+
+		if len(toolUseBlocks) > 0 {
+			// Add tool_use blocks to assistant message
+			for _, block := range toolUseBlocks {
+				assistantContent = append(assistantContent, api.ContentBlockParam{
+					Type:  "tool_use",
+					ID:    block.ID,
+					Name:  block.Name,
+					Input: block.Input,
+				})
+
+				// Collect tool use details for logging
+				inputJSON, _ := json.Marshal(block.Input)
+				detail := fmt.Sprintf("  📦 %s (id=%s): %s", block.Name, block.ID, string(inputJSON))
+				toolUseDetails = append(toolUseDetails, detail)
+			}
+
+			// Log tool calls
+			if qe.verbose {
+				for _, detail := range toolUseDetails {
+					qe.logger.Info(detail)
+				}
+			}
+		}
+
+		// Add assistant message to history
+		if len(assistantContent) > 0 {
+			qe.messages = append(qe.messages, api.MessageParam{
+				Role:    "assistant",
+				Content: assistantContent,
+			})
+		}
+
+		// Record assistant message to transcript
+		// Send notification even if only tool_use blocks (no text) to ensure cli/qqchannel receives the message
+		if len(assistantContent) > 0 {
+			var textParts []string
+			hasToolUse := false
+			for _, block := range assistantContent {
+				if block.Type == "text" && block.Text != "" {
+					textParts = append(textParts, block.Text)
+				}
+				if block.Type == "tool_use" {
+					hasToolUse = true
+				}
+			}
+
+			// If we have text, send it as normal
+			if len(textParts) > 0 {
+				assistantText := strings.Join(textParts, "\n\n")
+				qe.RecordMessageToTranscript(transcript.MessageTypeAssistant, "assistant", []byte(assistantText))
+			} else if hasToolUse {
+				// If only tool_use blocks (no text), send a placeholder notification
+				// This ensures cli/qqchannel will receive a message about tool execution
+				placeholder := "(正在执行工具操作…)"
+				qe.RecordMessageToTranscript(transcript.MessageTypeAssistant, "assistant", []byte(placeholder))
+			}
+		}
+
+		if len(toolUseBlocks) == 0 {
+			// No tool calls - capture final assistant text for retrieval (e.g., by channels)
+			var finalTextParts []string
+			for _, block := range assistantContent {
+				if block.Type == "text" && block.Text != "" {
+					finalTextParts = append(finalTextParts, block.Text)
+				}
+			}
+			if len(finalTextParts) > 0 {
+				qe.lastAssistantText = strings.Join(finalTextParts, "\n\n")
+			} else {
+				// Should not happen normally, but set placeholder
+				qe.lastAssistantText = "(正在执行工具操作…)"
+			}
+
+			// Done
+			if qe.verbose {
+				qe.logger.Debug("[Response complete]")
+			}
+			return nil
+		}
+
+		// Reset per-turn tool call tracking
+		qe.LastTurnToolCalls = nil
+
+		// Execute tool calls and add results
+		var toolResults []string
+		for _, block := range toolUseBlocks {
+			toolName := block.Name
+			toolInput := block.Input
+			toolUseID := block.ID
+
+			if qe.verbose {
+				qe.logger.Debugf("[Tool call: %s (id=%s)]", toolName, toolUseID)
+			}
+
+			// Build human-readable summary + JSON summary for external consumers
+			summary := buildToolCallSummary(toolName, toolInput)
+			inputJSON, _ := json.Marshal(toolInput)
+
+			// Record for channel consumption
+			qe.LastTurnToolCalls = append(qe.LastTurnToolCalls, ToolCallInfo{
+				Name:    toolName,
+				Input:   string(inputJSON),
+				Summary: summary,
+			})
+
+			// Invoke callback for real-time notification (e.g. QQ channel)
+			if qe.ToolCallCallback != nil {
+				qe.ToolCallCallback(toolName, summary)
+			}
+
+			// Find tool
+			tool := qe.findTool(toolName)
+			if tool == nil {
+				qe.addToolResult(toolUseID, fmt.Sprintf("Error: Unknown tool '%s'", toolName), true)
+				toolResults = append(toolResults, fmt.Sprintf("- **%s**: ❌ Unknown tool", toolName))
+				continue
+			}
+
+			// Convert input to map
+			inputMap, ok := toolInput.(map[string]any)
+			if !ok {
+				qe.addToolResult(toolUseID, "Error: Invalid tool input", true)
+				toolResults = append(toolResults, fmt.Sprintf("- **%s**: ❌ Invalid input", toolName))
+				qe.RecordToolResultToTranscript(toolUseID, toolName, "Invalid tool input", true)
+				continue
+			}
+
+			// Record tool call to transcript
+			qe.RecordToolCallToTranscript(toolUseID, toolName, inputMap)
+
+			// Execute tool
+			toolCtx := types.ToolUseContext{
+				Cwd:             qe.cwd,
+				AbortController: ctx,
+				Tools:           qe.tools,
+			}
+
+			result, err := tool.Call(ctx, inputMap, toolCtx, nil)
+			if err != nil {
+				qe.addToolResult(toolUseID, fmt.Sprintf("Error: %v", err), true)
+				toolResults = append(toolResults, fmt.Sprintf("- **%s**: ❌ Error: %v", toolName, err))
+				qe.RecordToolResultToTranscript(toolUseID, toolName, err.Error(), true)
+				continue
+			}
+
+			// Log tool result summary
+			resultStr, _ := json.Marshal(result.Data)
+			if qe.verbose {
+				preview := string(resultStr)
+				if len(preview) > 200 {
+					preview = preview[:200] + "..."
+				}
+				qe.logger.Debugf("  ✅ Result: %s", preview)
+			}
+
+			// Collect tool result for optional reply
+			status := "✅"
+			if result.IsError {
+				status = "❌"
+			}
+			toolResults = append(toolResults, fmt.Sprintf("- **%s**: %s", toolName, status))
+
+			// Add tool result
+			qe.addToolResult(toolUseID, string(resultStr), result.IsError)
+		}
+
+		// If showToolUsageInReply is enabled, append tool usage summary to the assistant's text
+		if qe.showToolUsageInReply && len(toolUseBlocks) > 0 {
+			// Find the last text block to append the summary
+			foundText := false
+			for i := len(assistantContent) - 1; i >= 0; i-- {
+				if assistantContent[i].Type == "text" {
+					summary := "\n\n---\n**🔧 Tool Usage:**\n" + strings.Join(toolResults, "\n")
+					assistantContent[i].Text += summary
+					foundText = true
+					break
+				}
+			}
+			// If no text block exists, create one
+			if !foundText {
+				summary := "**🔧 Tool Usage:**\n" + strings.Join(toolResults, "\n")
+				assistantContent = append(assistantContent, api.ContentBlockParam{
+					Type: "text",
+					Text: summary,
+				})
+			}
+		}
+	}
+
+	return fmt.Errorf("reached maximum turns (%d)", qe.effectiveMaxTurns())
+}
+
+// RunMainLoop exposes the internal tool-call loop for external channels.
+// It assumes the caller has already added a user message to qe.messages
+// and will run the turn loop until a text-only response is returned,
+// the budget/turn limit is hit, or a hard reset occurs.
+func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
+	// Clear any previous assistant text for this session
+	qe.lastAssistantText = ""
+
+	// One-time memory initialization (semantic index + compaction)
+	qe.initMemoryIndex(ctx)
+	qe.tryCompactMemory(ctx)
+
+	// Main query loop
+	for qe.currentTurn < qe.maxTurns {
+		qe.currentTurn++
+
+		if qe.verbose {
+			qe.logger.Infof("[Turn %d/%d]", qe.currentTurn, qe.maxTurns)
+		}
+
+		// Check if auto-compact is needed
+		if qe.compactConfig.Enabled {
+			shouldCompact, tokenCount, threshold := compact.CheckAutoCompact(qe.messages, qe.compactConfig, qe.compactTracker)
+			if shouldCompact {
+				if qe.verbose {
+					qe.logger.Infof("[Auto-compact triggered: %d tokens >= threshold %d]", tokenCount, threshold)
+				}
+				result, err := compact.CompactMessages(ctx, qe.client, qe.messages, qe.systemPrompt, qe.compactConfig)
+				if err != nil {
+					qe.logger.Infof("[Auto-compact error: %v]", err)
+				} else if result != nil {
+					qe.messages = compact.ApplyCompactResult(qe.messages, result)
+					qe.compactTracker.Compacted = true
+					qe.compactTracker.TurnCounter++
+					if qe.verbose {
+						qe.logger.Debugf("[Auto-compact complete: %d -> %d messages, %d -> %d tokens]",
+							result.OriginalMessageCount, result.CompactedMessageCount,
+							result.PreCompactTokenCount, result.PostCompactTokenCount)
+					}
+				}
+			} else {
+				warning, isBlocking := compact.GetWarningState(tokenCount, qe.compactConfig)
+				if warning != "" {
+					qe.logger.Info(warning)
+				}
+				if isBlocking {
+					return fmt.Errorf("context window is full (blocking limit reached). Please start a new conversation.")
+				}
+			}
+		}
+
+		// Check if snip is needed
+		if qe.snipConfig.Enabled {
+			snipResult := compact.SnipHistory(qe.messages, qe.snipConfig)
+			if snipResult != nil {
+				if qe.verbose {
+					qe.logger.Debugf("[Snip: removed %d messages, %d remaining]",
+						snipResult.SnippedCount, len(snipResult.Remaining))
+				}
+				qe.messages = snipResult.Remaining
+			}
+		}
+
+		// Build API request
+		fullSystemPrompt, memSummary := qe.buildFullSystemPrompt()
+		req := &api.MessageRequest{
+			Model:         qe.client.Model,
+			MaxTokens:     qe.maxTokens,
+			System:        fullSystemPrompt,
+			Messages:      qe.messages,
+			Tools:         qe.toAPITools(),
+			MemorySummary: memSummary,
+		}
+
+		// Configure thinking
+		if qe.thinkingConfig.Enabled {
+			if qe.thinkingConfig.Type == "adaptive" {
+				req.Thinking = &api.ThinkingConfig{Type: "enabled"}
+			} else {
+				req.Thinking = &api.ThinkingConfig{
+					Type:         "enabled",
+					BudgetTokens: qe.thinkingConfig.BudgetTokens,
+				}
+			}
+		} else {
+			req.Thinking = &api.ThinkingConfig{Type: "disabled"}
+		}
+
+		if qe.fastModeManager.IsActive() {
+			req.Model = qe.fastModeManager.GetModel()
+		}
+
+		if qe.verbose {
+			qe.dumpMessageRequest(req)
+			logger.Debug("dumpMessageRequest2")
+		}
+
+		resp, err := qe.client.SendMessage(ctx, req)
+		if err == nil && qe.verbose {
+			qe.dumpMessageResponse(resp)
+			logger.Debug("dumpMessageResponse2")
+		}
+		if err != nil {
+			// Handle context deadline exceeded (timeout) — retry with compacted messages
+			if isTimeoutError(err) {
+				recovered, retryErr := qe.tryRecoverFromTimeout(ctx, err)
+				if recovered {
+					qe.logger.Infof("[⏱️  Recovered from timeout — retrying with reduced context]\n")
+					continue
+				}
+				if retryErr != nil {
+					qe.FlushTranscript()
+					return retryErr
+				}
+				// Recovery failed (snip/compact couldn't help).
+				// Flush transcript and return gracefully so user can /resume.
+				qe.FlushTranscript()
+				if len(qe.messages) > 0 {
+					qe.logger.Infof("[⚠️  超时无法自动恢复，已保存当前会话快照，稍后可使用 /resume 恢复]\n")
+					return nil
+				}
+				return fmt.Errorf("API timeout unrecoverable: %w", err)
+			}
+			recovered, recoveryErr := qe.tryRecoverFromContextExceeded(ctx, err)
+			if recovered {
+				qe.logger.Infof("[🔄 Recovered from context length exceeded error]\n")
+				continue
+			}
+			if recoveryErr != nil {
+				return recoveryErr
+			}
+			return fmt.Errorf("API error: %w", err)
+		}
+
+		// Track usage
+		if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
+			tokenUsage := usage.TokenUsage{
+				InputTokens:              resp.Usage.InputTokens,
+				OutputTokens:             resp.Usage.OutputTokens,
+				CacheReadInputTokens:     resp.Usage.CacheReadInputTokens,
+				CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
+			}
+			qe.usageTracker.Add(tokenUsage)
+			pricing := usage.GetPricingForModel(qe.modelName)
+			qe.currentCost = qe.usageTracker.CalculateCost(pricing)
+			if qe.maxBudgetUSD > 0 && qe.currentCost >= qe.maxBudgetUSD {
+				return fmt.Errorf("reached maximum budget ($%.2f)", qe.maxBudgetUSD)
+			}
+		}
+
+		var assistantContent []api.ContentBlockParam
+
+		for _, block := range resp.Content {
+			if block.Type == "text" && block.Text != "" {
+				assistantContent = append(assistantContent, api.ContentBlockParam{
+					Type: "text",
+					Text: block.Text,
+				})
+			}
+			if block.Type == "thinking" && block.Text != "" {
+				if qe.showThinkingInLog {
+					qe.logger.Infof("[🧠 Thinking (%d chars)]\n%s\n[End Thinking]", len(block.Text), block.Text)
+				}
+			}
+		}
+
+		var toolUseBlocks []api.ContentBlock
+		for _, block := range resp.Content {
+			if block.Type == "tool_use" {
+				toolUseBlocks = append(toolUseBlocks, block)
+			}
+		}
+
+		if len(toolUseBlocks) > 0 {
+			for _, block := range toolUseBlocks {
+				assistantContent = append(assistantContent, api.ContentBlockParam{
+					Type:  "tool_use",
+					ID:    block.ID,
+					Name:  block.Name,
+					Input: block.Input,
+				})
+			}
+
+			if qe.verbose {
+				for _, block := range toolUseBlocks {
+					inputJSON, _ := json.Marshal(block.Input)
+					qe.logger.Infof("  📦 %s (id=%s): %s", block.Name, block.ID, string(inputJSON))
+				}
+			}
+		}
+
+		if len(assistantContent) > 0 {
+			qe.messages = append(qe.messages, api.MessageParam{
+				Role:    "assistant",
+				Content: assistantContent,
+			})
+		}
+
+		// Record assistant message to transcript
+		// Send notification even if only tool_use blocks (no text) to ensure cli/qqchannel receives the message
+		if len(assistantContent) > 0 {
+			var textParts []string
+			hasToolUse := false
+			for _, block := range assistantContent {
+				if block.Type == "text" && block.Text != "" {
+					textParts = append(textParts, block.Text)
+				}
+				if block.Type == "tool_use" {
+					hasToolUse = true
+				}
+			}
+
+			// If we have text, send it as normal
+			if len(textParts) > 0 {
+				assistantText := strings.Join(textParts, "\n\n")
+				qe.RecordMessageToTranscript(transcript.MessageTypeAssistant, "assistant", []byte(assistantText))
+			} else if hasToolUse {
+				// If only tool_use blocks (no text), send a placeholder notification
+				// This ensures cli/qqchannel will receive a message about tool execution
+				placeholder := "(正在执行工具操作…)"
+				qe.RecordMessageToTranscript(transcript.MessageTypeAssistant, "assistant", []byte(placeholder))
+			}
+		}
+
+		if len(toolUseBlocks) == 0 {
+			// Capture final assistant text for retrieval (e.g., CLI output)
+			var finalTextParts []string
+			for _, block := range assistantContent {
+				if block.Type == "text" && block.Text != "" {
+					finalTextParts = append(finalTextParts, block.Text)
+				}
+			}
+			if len(finalTextParts) > 0 {
+				qe.lastAssistantText = strings.Join(finalTextParts, "\n\n")
+			} else {
+				qe.lastAssistantText = "(正在执行工具操作…)"
+			}
+
+			if qe.verbose {
+				qe.logger.Debug("[Response complete]")
+			}
+			return nil
+		}
+
+		qe.LastTurnToolCalls = nil
+
+		var toolResults []string
+		for _, block := range toolUseBlocks {
+			toolName := block.Name
+			toolInput := block.Input
+			toolUseID := block.ID
+
+			if qe.verbose {
+				qe.logger.Debugf("[Tool call: %s (id=%s)]", toolName, toolUseID)
+			}
+
+			summary := buildToolCallSummary(toolName, toolInput)
+			inputJSON, _ := json.Marshal(toolInput)
+
+			qe.LastTurnToolCalls = append(qe.LastTurnToolCalls, ToolCallInfo{
+				Name:    toolName,
+				Input:   string(inputJSON),
+				Summary: summary,
+			})
+
+			if qe.ToolCallCallback != nil {
+				qe.ToolCallCallback(toolName, summary)
+			}
+
+			tool := qe.findTool(toolName)
+			if tool == nil {
+				qe.addToolResult(toolUseID, fmt.Sprintf("Error: Unknown tool '%s'", toolName), true)
+				toolResults = append(toolResults, fmt.Sprintf("- **%s**: ❌ Unknown tool", toolName))
+				// Record tool result to transcript
+				qe.RecordToolResultToTranscript(toolUseID, toolName, fmt.Sprintf("Unknown tool '%s'", toolName), true)
+				continue
+			}
+
+			inputMap, ok := toolInput.(map[string]any)
+			if !ok {
+				qe.addToolResult(toolUseID, "Error: Invalid tool input", true)
+				toolResults = append(toolResults, fmt.Sprintf("- **%s**: ❌ Invalid input", toolName))
+				// Record tool result to transcript
+				qe.RecordToolResultToTranscript(toolUseID, toolName, "Invalid tool input", true)
+				continue
+			}
+
+			// Record tool call to transcript
+			qe.RecordToolCallToTranscript(toolUseID, toolName, inputMap)
+
+			toolCtx := types.ToolUseContext{
+				Cwd:             qe.cwd,
+				AbortController: ctx,
+				Tools:           qe.tools,
+			}
+
+			result, err := tool.Call(ctx, inputMap, toolCtx, nil)
+			if err != nil {
+				qe.addToolResult(toolUseID, fmt.Sprintf("Error: %v", err), true)
+				toolResults = append(toolResults, fmt.Sprintf("- **%s**: ❌ Error: %v", toolName, err))
+				// Record tool result to transcript
+				qe.RecordToolResultToTranscript(toolUseID, toolName, err.Error(), true)
+				continue
+			}
+
+			resultStr, _ := json.Marshal(result.Data)
+			if qe.verbose {
+				preview := string(resultStr)
+				if len(preview) > 200 {
+					preview = preview[:200] + "..."
+				}
+				qe.logger.Infof("  ✅ Result: %s", preview)
+			}
+
+			status := "✅"
+			if result.IsError {
+				status = "❌"
+			}
+			toolResults = append(toolResults, fmt.Sprintf("- **%s**: %s", toolName, status))
+			qe.addToolResult(toolUseID, string(resultStr), result.IsError)
+			// Record tool result to transcript
+			qe.RecordToolResultToTranscript(toolUseID, toolName, string(resultStr), result.IsError)
+		}
+
+		if qe.showToolUsageInReply && len(toolUseBlocks) > 0 {
+			foundText := false
+			for i := len(assistantContent) - 1; i >= 0; i-- {
+				if assistantContent[i].Type == "text" {
+					assistantContent[i].Text += "\n\n---\n**🔧 Tool Usage:**\n" + strings.Join(toolResults, "\n")
+					foundText = true
+					break
+				}
+			}
+			if !foundText {
+				assistantContent = append(assistantContent, api.ContentBlockParam{
+					Type: "text",
+					Text: "**🔧 Tool Usage:**\n" + strings.Join(toolResults, "\n"),
+				})
+			}
+		}
+	}
+
+	return fmt.Errorf("reached maximum turns (%d)", qe.maxTurns)
+}
+
+// buildFullSystemPrompt combines base system prompt with context (git status, AGENT.md, etc.)
+// Returns the prompt string and a MemorySummary of what was loaded.
+func (qe *QueryEngine) buildFullSystemPrompt() (string, *api.MemorySummary) {
+	var parts []string
+	summary := &api.MemorySummary{}
+
+	if qe.systemPrompt != "" {
+		parts = append(parts, qe.systemPrompt)
+	}
+
+	skillsSection := qe.skillRegistry.FormatSkillsForPrompt()
+	if skillsSection != "" {
+		parts = append(parts, skillsSection)
+	}
+
+	memoryFiles, err := claudemd.GetMemoryFiles(qe.cwd)
+	if err == nil {
+		for _, f := range memoryFiles {
+			summary.ClaudeMDFiles = append(summary.ClaudeMDFiles, f.Path)
+		}
+		summary.TotalFiles += len(memoryFiles)
+		agentMdContext := claudemd.BuildAgentMdContext(memoryFiles)
+		if agentMdContext != "" {
+			parts = append(parts, agentMdContext)
+		}
+	}
+
+	// Inject memory system prompt and relevant memories
+	if qe.memoryIndex != nil {
+		if qe.autoMemoryPrompt == "" {
+			qe.autoMemoryPrompt = memory.BuildMemoryPrompt(memory.PromptConfig{
+				DisplayName: "Auto Memory",
+				MemoryDir:   qe.memoryDir,
+			})
+		}
+		if qe.autoMemoryPrompt != "" {
+			summary.AutoMemPrompt = true
+			parts = append(parts, qe.autoMemoryPrompt)
+		}
+
+		// Search relevant memories based on recent conversation
+		if len(qe.messages) > 0 {
+			lastUserMsg := qe.findLastUserMessageText()
+			if lastUserMsg != "" {
+				results := qe.memoryIndex.Search(lastUserMsg, 5)
+				if len(results) > 0 {
+					var relCtx strings.Builder
+					for _, r := range results {
+						summary.SemanticHits = append(summary.SemanticHits, r.Entry.Name)
+						summary.TotalFiles++
+						relCtx.WriteString(fmt.Sprintf("### %s\n%s\n\n", r.Entry.Name, r.Entry.Description))
+					}
+					parts = append(parts, "## 相关记忆\n\n"+relCtx.String())
+				}
+			}
+		}
+	}
+
+	sysCtx := ctxpkg.GetSystemContext()
+	if sysCtx.GitStatus != "" {
+		parts = append(parts, "## Git Status\n\n"+sysCtx.GitStatus)
+	}
+	parts = append(parts, sysCtx.CurrentDate)
+
+	return strings.Join(parts, "\n\n"), summary
+}
+
+// toAPITools converts tools to API tool definitions
+func (qe *QueryEngine) toAPITools() []api.ToolParam {
+	var apiTools []api.ToolParam
+	for _, tool := range qe.tools {
+		if !tool.IsEnabled() {
+			continue
+		}
+		apiTools = append(apiTools, api.ToolParam{
+			Name:        tool.Name(),
+			Description: tool.Description(nil, types.ToolDescriptionOptions{}),
+			InputSchema: tool.InputSchema(),
+		})
+	}
+	return apiTools
+}
+
+// findTool finds a tool by name
+func (qe *QueryEngine) findTool(name string) types.Tool {
+	for _, tool := range qe.tools {
+		if tool.Name() == name {
+			return tool
+		}
+	}
+	return nil
+}
+
+// addToolResult adds a tool result message
+func (qe *QueryEngine) addToolResult(toolUseID string, content string, isError bool) {
+	qe.messages = append(qe.messages, api.MessageParam{
+		Role: "user",
+		Content: []api.ContentBlockParam{
+			{
+				Type:      "tool_result",
+				ToolUseID: toolUseID,
+				Content: []api.ContentBlockParam{
+					{
+						Type: "text",
+						Text: content,
+					},
+				},
+				IsError: isError,
+			},
+		},
+	})
+}
+
+// findLastUserMessageText finds and returns the last user message text
+func (qe *QueryEngine) findLastUserMessageText() string {
+	for i := len(qe.messages) - 1; i >= 0; i-- {
+		msg := qe.messages[i]
+		if msg.Role == "user" {
+			// Simple message
+			if text, ok := msg.Content.(string); ok && text != "" {
+				return text
+			}
+			// Array content blocks
+			if blocks, ok := msg.Content.([]api.ContentBlockParam); ok {
+				for _, block := range blocks {
+					if block.Type == "text" && block.Text != "" {
+						return block.Text
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// GetLastAssistantText returns the last assistant's text response.
+// It first checks the cached lastAssistantText (set at end of turn),
+// then falls back to scanning qe.messages jeśli not set.
+func (qe *QueryEngine) GetLastAssistantText() string {
+	// Prefer cached value (set at turn completion)
+	if qe.lastAssistantText != "" {
+		return qe.lastAssistantText
+	}
+	// Fallback: scan message history
+	for i := len(qe.messages) - 1; i >= 0; i-- {
+		msg := qe.messages[i]
+		if msg.Role == "assistant" {
+			if blocks, ok := msg.Content.([]api.ContentBlockParam); ok {
+				var texts []string
+				hasToolUse := false
+				for _, block := range blocks {
+					if block.Type == "text" && block.Text != "" {
+						texts = append(texts, block.Text)
+					}
+					if block.Type == "tool_use" {
+						hasToolUse = true
+					}
+				}
+				if len(texts) > 0 {
+					return strings.Join(texts, "\n")
+				}
+				if hasToolUse {
+					return "(正在执行工具操作…)"
+				}
+			}
+			if text, ok := msg.Content.(string); ok && text != "" {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+// tryRecoverFromContextExceeded handles context_length_exceeded errors with a
+// tiered recovery strategy:
+//
+//	Tier 1 – aggressive snip (keep last N messages)
+//	Tier 2 – LLM-assisted compact (summarise old messages into one summary)
+//	Tier 3 – hard reset (only keep the very last user message)
+//
+// Returns (recovered=true, nil) on success, (recovered=false, err) on failure.
+func (qe *QueryEngine) tryRecoverFromContextExceeded(ctx context.Context, err error) (bool, error) {
+	var ctxErr *api.ContextLengthExceededError
+	if !errors.As(err, &ctxErr) {
+		return false, nil // not a context-length error
+	}
+
+	qe.logger.Infof("[⚠️  Context length exceeded detected (HTTP %d)]", ctxErr.StatusCode)
+
+	// --- Tier 1: Aggressive snip ---
+	tier1Preserve := 4
+	if len(qe.messages) > tier1Preserve {
+		if qe.verbose {
+			qe.logger.Debugf("[🔄 Recovery Tier 1: Aggressive snip – keeping last %d messages (%d total)",
+				tier1Preserve, len(qe.messages))
+		}
+		qe.messages = qe.messages[len(qe.messages)-tier1Preserve:]
+		return true, nil
+	}
+
+	// --- Tier 2: LLM-assisted compact ---
+	if qe.compactConfig.Enabled && len(qe.messages) >= 4 {
+		if qe.verbose {
+			qe.logger.Infof("[🔄 Recovery Tier 2: LLM-assisted compact with fallback preserve=2]\n")
+		}
+		fallbackConfig := &compact.AutoCompactConfig{
+			Enabled:            qe.compactConfig.Enabled,
+			ThresholdRatio:     0.50,
+			WarningRatio:       qe.compactConfig.WarningRatio,
+			MaxContextTokens:   qe.compactConfig.MaxContextTokens,
+			ModelContextWindow: qe.compactConfig.ModelContextWindow,
+		}
+
+		result, compactErr := compact.CompactMessages(ctx, qe.client, qe.messages, qe.systemPrompt, fallbackConfig)
+		if compactErr == nil && result != nil {
+			qe.messages = compact.ApplyCompactResult(qe.messages, result)
+			qe.compactTracker.Compacted = true
+			if qe.verbose {
+				qe.logger.Debugf("[✅ Compact recovery succeeded: %d → %d messages, %d → %d tokens]",
+					result.OriginalMessageCount, result.CompactedMessageCount,
+					result.PreCompactTokenCount, result.PostCompactTokenCount)
+			}
+			return true, nil
+		}
+	}
+
+	// --- Tier 3: Hard reset ---
+	if qe.verbose {
+		qe.logger.Infof("[🔄 Recovery Tier 3: Hard reset – dropping conversation history]\n")
+	}
+	if len(qe.messages) >= 2 {
+		lastMsg := qe.messages[len(qe.messages)-1]
+		if lastMsg.Role == "user" {
+			qe.messages = []api.MessageParam{lastMsg}
+		} else {
+			qe.messages = make([]api.MessageParam, 0)
+		}
+	} else {
+		qe.messages = make([]api.MessageParam, 0)
+	}
+	// Hard reset succeeded, return recovered=true to let caller retry
+	return true, nil
+}
+
+// isTimeoutError checks if an error is a context deadline exceeded / timeout error
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var deadlineErr *api.ContextDeadlineExceededError
+	if errors.As(err, &deadlineErr) {
+		return true
+	}
+	// Also check generic context.DeadlineExceeded
+	return errors.Is(err, context.DeadlineExceeded)
+}
+
+// tryRecoverFromTimeout handles context deadline exceeded errors by reducing
+// context size (snip/compact) and allowing the caller to retry.
+//
+// Recovery strategy:
+//   - Try snip first (fast, no API call needed)
+//   - If snip isn't viable and compact is enabled, try compact
+//   - If both fail or aren't applicable, return unrecoverable
+//
+// Returns (recovered=true, nil) on success, (recovered=false, err) on failure.
+func (qe *QueryEngine) tryRecoverFromTimeout(ctx context.Context, err error) (bool, error) {
+	qe.logger.Infof("[⏱️  Request timeout detected, attempting context reduction recovery]\n")
+
+	if qe.verbose {
+		qe.logger.Infof("[Current context: %d messages]", len(qe.messages))
+	}
+
+	// Step 1: Aggressive snip — keep only last few messages
+	preserveCount := 6
+	if len(qe.messages) > preserveCount {
+		if qe.verbose {
+			qe.logger.Debugf("[🔄 Timeout recovery: Snip — keeping last %d messages (%d total)",
+				preserveCount, len(qe.messages))
+		}
+		qe.messages = qe.messages[len(qe.messages)-preserveCount:]
+		return true, nil
+	}
+
+	// Step 2: If snip didn't remove enough, try compact (if feasible)
+	if qe.compactConfig.Enabled && len(qe.messages) >= 6 {
+		if qe.verbose {
+			qe.logger.Infof("[🔄 Timeout recovery: LLM-assisted compact (note: this requires another API call)]\n")
+		}
+		// For timeout recovery, we use a more aggressive compact config
+		// This compact attempt may itself timeout, so we use a shorter deadline
+		compactCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+
+		result, compactErr := compact.CompactMessages(compactCtx, qe.client, qe.messages, qe.systemPrompt, qe.compactConfig)
+		if compactErr == nil && result != nil {
+			qe.messages = compact.ApplyCompactResult(qe.messages, result)
+			qe.compactTracker.Compacted = true
+			if qe.verbose {
+				qe.logger.Debugf("[✅ Compact recovery succeeded: %d → %d messages]",
+					result.OriginalMessageCount, result.CompactedMessageCount)
+			}
+			return true, nil
+		}
+		if qe.verbose {
+			qe.logger.Debugf("[⚠️  Compact recovery failed: %v]", compactErr)
+		}
+	}
+
+	// Step 3: If compact is not viable or failed, return unrecoverable
+	// The caller (client-level retry) will handle further retries
+	return false, nil
+}
+
+// buildToolCallSummary creates a human-readable summary of a tool call.
+func buildToolCallSummary(toolName string, input any) string {
+	inputMap, ok := input.(map[string]any)
+	if !ok {
+		return toolName
+	}
+
+	switch toolName {
+	case "read_file":
+		if path, ok := inputMap["file_path"].(string); ok {
+			return fmt.Sprintf("读取 %s", path)
+		}
+	case "write_file":
+		if path, ok := inputMap["file_path"].(string); ok {
+			return fmt.Sprintf("写入 %s", path)
+		}
+	case "edit_file":
+		if path, ok := inputMap["file_path"].(string); ok {
+			return fmt.Sprintf("编辑 %s", path)
+		}
+	case "bash":
+		if cmd, ok := inputMap["command"].(string); ok {
+			if len(cmd) > 80 {
+				cmd = cmd[:80] + "…"
+			}
+			return fmt.Sprintf("执行命令: %s", cmd)
+		}
+	case "grep":
+		if pattern, ok := inputMap["pattern"].(string); ok {
+			if path, ok := inputMap["path"].(string); ok {
+				return fmt.Sprintf("搜索 %s (路径: %s)", pattern, path)
+			}
+			return fmt.Sprintf("搜索 %s", pattern)
+		}
+	case "glob":
+		if pattern, ok := inputMap["pattern"].(string); ok {
+			return fmt.Sprintf("查找文件 %s", pattern)
+		}
+	case "web_search":
+		if query, ok := inputMap["query"].(string); ok {
+			return fmt.Sprintf("搜索网络: %s", query)
+		}
+	case "web_fetch":
+		if url, ok := inputMap["url"].(string); ok {
+			if len(url) > 60 {
+				url = url[:60] + "…"
+			}
+			return fmt.Sprintf("获取网页: %s", url)
+		}
+	}
+
+	for k, v := range inputMap {
+		if s, ok := v.(string); ok && len(s) > 0 {
+			if len(s) > 60 {
+				s = s[:60] + "…"
+			}
+			return fmt.Sprintf("%s(%s=%s)", toolName, k, s)
+		}
+	}
+	return toolName
+}
