@@ -528,8 +528,19 @@ func (c *Client) sendAnthropicRequest(ctx context.Context, req *MessageRequest) 
 
 		if isRetryableError(err) {
 			lastErr = err
+
+			// Check remaining context time to avoid useless waiting
+			remaining := time.Duration(0)
+			if deadline, ok := ctx.Deadline(); ok {
+				remaining = time.Until(deadline)
+			}
+
 			if isRateLimitError(err) {
-				logger.Info("[RateLimit] 429 Too Many Requests (attempt %d/%d)", attempt+1, maxRetries+1)
+				if remaining > 0 {
+					logger.Info("[RateLimit] 429 Too Many Requests (attempt %d/%d, context left: %v)", attempt+1, maxRetries+1, remaining.Round(time.Second))
+				} else {
+					logger.Info("[RateLimit] 429 Too Many Requests (attempt %d/%d)", attempt+1, maxRetries+1)
+				}
 			} else if isContextDeadlineExceeded(err) {
 				logger.Info("[Timeout] context deadline exceeded (attempt %d/%d)", attempt+1, maxRetries+1)
 			} else {
@@ -543,6 +554,12 @@ func (c *Client) sendAnthropicRequest(ctx context.Context, req *MessageRequest) 
 			} else {
 				retryAfter = c.calculateDelay(attempt)
 			}
+
+			// If remaining time is less than retry delay + buffer, fail early
+			if remaining > 0 && remaining < retryAfter+2*time.Second {
+				return nil, fmt.Errorf("rate limit retry aborted: insufficient time left in context (need ~%v, have %v)", (retryAfter + 2*time.Second).Round(time.Second), remaining.Round(time.Second))
+			}
+
 			logger.Debug("[Retry] Waiting %v before next attempt...", retryAfter)
 			select {
 			case <-time.After(retryAfter):

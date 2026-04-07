@@ -1317,7 +1317,7 @@ func isTimeoutError(err error) bool {
 func (qe *QueryEngine) tryRecoverFromTimeout(ctx context.Context, err error) (bool, error) {
 	// Check context first — if it's already done, recovery is impossible
 	if err := ctx.Err(); err != nil {
-		qe.logger.Warn("[⏱️  Context expired/cancelled — cannot recover from timeout]")
+		qe.logger.Warn("[⏱️  Task aborted: Upstream context timeout reached during recovery. This often happens due to API rate limits (HTTP 429) exhausting the limited task duration.]")
 		return false, err
 	}
 
