@@ -272,14 +272,14 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 	// Clear previous assistant text for this new turn
 	qe.lastAssistantText = ""
 
-	// One-time memory initialization (semantic index + compaction)
-	qe.initMemoryIndex(ctx)
-	qe.tryCompactMemory(ctx)
-
-	// Check if this is a slash command
+	// Check if this is a slash command BEFORE triggering any LLM operations (like memory initialization)
 	if slash.IsSlashCommand(prompt) {
 		return qe.handleSlashCommand(ctx, prompt)
 	}
+
+	// One-time memory initialization (semantic index + compaction)
+	qe.initMemoryIndex(ctx)
+	qe.tryCompactMemory(ctx)
 
 	// Add to history
 	qe.historyMgr.AddSimpleHistory(prompt)

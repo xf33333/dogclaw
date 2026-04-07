@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -292,6 +293,9 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 		return fmt.Errorf("%s", result.ErrorMsg)
 	}
 
+	// Capture output text natively for CLI presentation
+	qe.lastAssistantText = result.Output
+
 	// Handle specific commands that modify engine state
 	name, _ := slash.ParseCommand(input)
 	switch strings.ToLower(name) {
@@ -313,6 +317,7 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 	case "verbose":
 		qe.verbose = !qe.verbose
 		qe.logger.Infof("Verbose mode: %v", qe.verbose)
+		qe.lastAssistantText = fmt.Sprintf("Verbose mode: %v", qe.verbose)
 
 	case "max-turns":
 		_, args := slash.ParseCommand(input)
@@ -330,6 +335,7 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 		if err != nil {
 			return err
 		}
+		qe.lastAssistantText = cmdResult.Output
 		qe.logger.Info(cmdResult.Output)
 
 	case "skills":
@@ -338,6 +344,7 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 		if err != nil {
 			return err
 		}
+		qe.lastAssistantText = cmdResult.Output
 		qe.logger.Info(cmdResult.Output)
 
 	case "thinking":
@@ -348,7 +355,9 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 			if !qe.thinkingConfig.Enabled {
 				state = "disabled"
 			}
-			qe.logger.Infof("Thinking: %s (budget: %d tokens)", state, qe.thinkingConfig.BudgetTokens)
+			msg := fmt.Sprintf("Thinking: %s (budget: %d tokens)", state, qe.thinkingConfig.BudgetTokens)
+			qe.lastAssistantText = msg
+			qe.logger.Info(msg)
 		} else {
 			thinkType, err := thinking.ParseThinkingType(args)
 			if err != nil {
@@ -367,7 +376,9 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 				qe.thinkingConfig.Enabled = false
 				qe.thinkingConfig.BudgetTokens = 0
 			}
-			qe.logger.Infof("Thinking set to: %s", thinkType)
+			msg := fmt.Sprintf("Thinking set to: %s", thinkType)
+			qe.lastAssistantText = msg
+			qe.logger.Info(msg)
 		}
 
 	case "fast":
@@ -375,23 +386,29 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 		args = strings.TrimSpace(args)
 		if args == "" {
 			state := qe.fastModeManager.GetState()
-			qe.logger.Infof("Fast Mode: %s", state)
+			msg := fmt.Sprintf("Fast Mode: %s", state)
 			if state == fastmode.StateCooldown {
 				remaining := qe.fastModeManager.TimeUntilCooldownEnd()
-				qe.logger.Infof("Cooldown remaining: %v", remaining)
+				msg += fmt.Sprintf("\nCooldown remaining: %v", remaining)
 			}
+			qe.lastAssistantText = msg
+			qe.logger.Infof(msg)
 		} else {
 			switch strings.ToLower(args) {
 			case "on", "enable":
 				qe.fastModeManager = fastmode.NewManager(true)
 				qe.fastModeManager.SetModel(qe.modelName)
+				qe.lastAssistantText = "Fast mode enabled"
 				qe.logger.Info("Fast mode enabled")
 			case "off", "disable":
 				qe.fastModeManager.Disable()
+				qe.lastAssistantText = "Fast mode disabled"
 				qe.logger.Info("Fast mode disabled")
 			case "status":
 				state := qe.fastModeManager.GetState()
-				qe.logger.Infof("Fast Mode: %s (model: %s)", state, qe.fastModeManager.GetModel())
+				msg := fmt.Sprintf("Fast Mode: %s (model: %s)", state, qe.fastModeManager.GetModel())
+				qe.lastAssistantText = msg
+				qe.logger.Infof(msg)
 			default:
 				qe.logger.Warnf("Unknown fast mode argument: %s. Use: on/off/status", args)
 			}
@@ -404,21 +421,28 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 			snipResult := compact.SnipHistory(qe.messages, qe.snipConfig)
 			if snipResult != nil {
 				qe.messages = snipResult.Remaining
-				qe.logger.Infof("Snipped %d messages, %d remaining", snipResult.SnippedCount, len(snipResult.Remaining))
+				msg := fmt.Sprintf("Snipped %d messages, %d remaining", snipResult.SnippedCount, len(snipResult.Remaining))
+				qe.lastAssistantText = msg
+				qe.logger.Infof(msg)
 			} else {
+				qe.lastAssistantText = "No snip needed"
 				qe.logger.Info("No snip needed")
 			}
 		} else {
 			switch strings.ToLower(args) {
 			case "on", "enable":
 				qe.snipConfig.Enabled = true
+				qe.lastAssistantText = "Snip enabled"
 				qe.logger.Info("Snip enabled")
 			case "off", "disable":
 				qe.snipConfig.Enabled = false
+				qe.lastAssistantText = "Snip disabled"
 				qe.logger.Info("Snip disabled")
 			case "status":
-				qe.logger.Infof("Snip: enabled=%v, max_messages=%d, preserve=%d",
+				msg := fmt.Sprintf("Snip: enabled=%v, max_messages=%d, preserve=%d",
 					qe.snipConfig.Enabled, qe.snipConfig.MaxMessages, qe.snipConfig.PreserveCount)
+				qe.lastAssistantText = msg
+				qe.logger.Infof(msg)
 			}
 		}
 
@@ -430,14 +454,18 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 			if qe.showToolUsageInReply {
 				state = "enabled"
 			}
-			qe.logger.Infof("Show tool usage in reply: %s", state)
+			msg := fmt.Sprintf("Show tool usage in reply: %s", state)
+			qe.lastAssistantText = msg
+			qe.logger.Infof(msg)
 		} else {
 			switch strings.ToLower(args) {
 			case "on", "enable":
 				qe.showToolUsageInReply = true
+				qe.lastAssistantText = "Tool usage will be shown in replies ✅"
 				qe.logger.Info("Tool usage will be shown in replies ✅")
 			case "off", "disable":
 				qe.showToolUsageInReply = false
+				qe.lastAssistantText = "Tool usage hidden from replies"
 				qe.logger.Info("Tool usage hidden from replies")
 			default:
 				qe.logger.Warnf("Unknown argument: %s. Use: on/off", args)
@@ -452,14 +480,18 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 			if qe.showThinkingInLog {
 				state = "enabled"
 			}
-			qe.logger.Infof("Show thinking in log: %s", state)
+			msg := fmt.Sprintf("Show thinking in log: %s", state)
+			qe.lastAssistantText = msg
+			qe.logger.Infof(msg)
 		} else {
 			switch strings.ToLower(args) {
 			case "on", "enable":
 				qe.showThinkingInLog = true
+				qe.lastAssistantText = "Thinking will be logged ✅"
 				qe.logger.Info("Thinking will be logged ✅")
 			case "off", "disable":
 				qe.showThinkingInLog = false
+				qe.lastAssistantText = "Thinking hidden from logs"
 				qe.logger.Info("Thinking hidden from logs")
 			default:
 				qe.logger.Warnf("Unknown argument: %s. Use: on/off", args)
@@ -469,15 +501,27 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 	case "sessions":
 		_, args := slash.ParseCommand(input)
 		args = strings.TrimSpace(args)
-		if err := qe.handleSessionsCommand(ctx, args); err != nil {
-			qe.logger.Errorf("Error listing sessions: %v", err)
+		out, err := qe.handleSessionsCommand(ctx, args)
+		if err != nil {
+			errStr := fmt.Sprintf("Error listing sessions: %v", err)
+			qe.lastAssistantText = errStr
+			qe.logger.Error(errStr)
+		} else {
+			qe.lastAssistantText = out
+			qe.logger.Info(out)
 		}
 
 	case "resume":
 		_, args := slash.ParseCommand(input)
 		args = strings.TrimSpace(args)
-		if err := qe.handleResumeCommand(ctx, args); err != nil {
-			qe.logger.Errorf("Error resuming session: %v", err)
+		out, err := qe.handleResumeCommand(ctx, args)
+		if err != nil {
+			errStr := fmt.Sprintf("Error resuming session: %v", err)
+			qe.lastAssistantText = errStr
+			qe.logger.Error(errStr)
+		} else {
+			qe.lastAssistantText = out
+			qe.logger.Info(out)
 		}
 
 	default:
@@ -488,7 +532,7 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 }
 
 // handleSessionsCommand handles the /sessions command to list available sessions
-func (qe *QueryEngine) handleSessionsCommand(ctx context.Context, args string) error {
+func (qe *QueryEngine) handleSessionsCommand(ctx context.Context, args string) (string, error) {
 	// Parse optional search query
 	query := strings.TrimSpace(args)
 
@@ -496,14 +540,14 @@ func (qe *QueryEngine) handleSessionsCommand(ctx context.Context, args string) e
 	if qe.transcriptProjectMgr == nil {
 		pm, err := transcript.NewProjectManager("")
 		if err != nil {
-			return fmt.Errorf("failed to create transcript manager: %w", err)
+			return "", fmt.Errorf("failed to create transcript manager: %w", err)
 		}
 		qe.transcriptProjectMgr = pm
 	}
 	if qe.sessionManager == nil {
 		sm, err := transcript.NewSessionManager("")
 		if err != nil {
-			return fmt.Errorf("failed to create session manager: %w", err)
+			return "", fmt.Errorf("failed to create session manager: %w", err)
 		}
 		qe.sessionManager = sm
 	}
@@ -515,28 +559,27 @@ func (qe *QueryEngine) handleSessionsCommand(ctx context.Context, args string) e
 		// Search sessions across all projects using SessionManager
 		sessions, err = qe.sessionManager.SearchSessions(query)
 		if err != nil {
-			return fmt.Errorf("failed to search sessions: %w", err)
+			return "", fmt.Errorf("failed to search sessions: %w", err)
 		}
 	} else {
 		// List sessions for current cwd with detailed summaries
 		sessions, err = qe.listSessionsWithSummary(qe.cwd)
 		if err != nil {
-			return fmt.Errorf("failed to list sessions: %w", err)
+			return "", fmt.Errorf("failed to list sessions: %w", err)
 		}
 	}
 
 	if len(sessions) == 0 {
-		qe.logger.Info("No previous sessions found.")
-		return nil
+		return "No previous sessions found.", nil
 	}
 
-	qe.logger.Infof("Found %d session(s):", len(sessions))
-	for _, s := range sessions {
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("Found %d session(s):\n", len(sessions)))
+	for i, s := range sessions {
 		// Build a rich one-line summary
-		summary := s.FormatSummary()
-		qe.logger.Infof("  %s", summary)
+		builder.WriteString(fmt.Sprintf("  [%d] %s\n", i+1, s.FormatSummary()))
 	}
-	return nil
+	return builder.String(), nil
 }
 
 // listSessionsWithSummary returns SessionSummary for current working directory
@@ -577,17 +620,29 @@ func (qe *QueryEngine) listSessionsWithSummary(cwd string) ([]transcript.Session
 }
 
 // handleResumeCommand handles the /resume command to restore a previous session
-func (qe *QueryEngine) handleResumeCommand(ctx context.Context, args string) error {
+func (qe *QueryEngine) handleResumeCommand(ctx context.Context, args string) (string, error) {
 	sessionID := strings.TrimSpace(args)
-	if sessionID == "" {
-		// Interactive selection if multiple sessions exist
-		sessions, err := qe.ListSessions()
-		if err != nil {
-			return fmt.Errorf("failed to list sessions: %w", err)
+	
+	// Fetch sessions to support index-based selection and listing
+	var sessions []transcript.SessionSummary
+	var err error
+	
+	// Make sure session manager exists
+	if qe.sessionManager == nil {
+		sm, errInit := transcript.NewSessionManager("")
+		if errInit == nil {
+			qe.sessionManager = sm
 		}
+	}
+	
+	sessions, err = qe.listSessionsWithSummary(qe.cwd)
+	if err != nil {
+		return "", fmt.Errorf("failed to list sessions: %w", err)
+	}
 
+	if sessionID == "" {
 		if len(sessions) == 0 {
-			return fmt.Errorf("no previous sessions found")
+			return "", fmt.Errorf("no previous sessions found")
 		}
 
 		if len(sessions) == 1 {
@@ -595,28 +650,36 @@ func (qe *QueryEngine) handleResumeCommand(ctx context.Context, args string) err
 			sessionID = sessions[0].SessionID
 		} else {
 			// Multiple sessions - show list and ask user to specify
-			qe.logger.Infof("Multiple sessions found. Use /resume <session-id> to select:")
+			var builder strings.Builder
+			builder.WriteString("Multiple sessions found. Use /resume <session-id> or index to select:\n")
 			for i, s := range sessions {
 				if i >= 5 {
+					builder.WriteString("  ...\n")
 					break // show top 5
 				}
-				qe.logger.Infof("  %s", s.SessionID)
+				builder.WriteString(fmt.Sprintf("  [%d] %s\n", i+1, s.SessionID))
 			}
-			return fmt.Errorf("please specify which session to resume")
+			return builder.String(), fmt.Errorf("please specify which session to resume")
+		}
+	} else {
+		// Try to parse the input as an index (1-based)
+		if idx, errParse := strconv.Atoi(sessionID); errParse == nil {
+			if idx > 0 && idx <= len(sessions) {
+				sessionID = sessions[idx-1].SessionID
+			} else {
+				return "", fmt.Errorf("invalid session index: %d (valid range: 1-%d)", idx, len(sessions))
+			}
 		}
 	}
 
 	// Resume specific session
-	err := qe.ResumeFromTranscript(sessionID)
+	err = qe.ResumeFromTranscript(sessionID)
 	if err != nil {
-		return fmt.Errorf("failed to resume session %s: %w", sessionID, err)
+		return "", fmt.Errorf("failed to resume session %s: %w", sessionID, err)
 	}
-	qe.logger.Infof("✅ Resumed session: %s", qe.sessionID)
-
-	// Also show a brief summary
-	qe.logger.Infof("   Messages: %d, Turns: %d", len(qe.messages), qe.currentTurn)
-
-	return nil
+	
+	msg := fmt.Sprintf("✅ Resumed session: %s\n   Messages: %d, Turns: %d", qe.sessionID, len(qe.messages), qe.currentTurn)
+	return msg, nil
 }
 
 // GetUsageTracker returns the current usage tracker
