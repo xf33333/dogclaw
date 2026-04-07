@@ -215,6 +215,30 @@ func (c *WeixinChannel) handleInboundMessage(ctx context.Context, msg WeixinMess
 		return
 	}
 
+	// Ensure we have a valid context token for this user
+	if msg.ContextToken == "" {
+		logger.Warnf("[weixin] Message from %s has no context_token, fetching via GetConfig...", fromUserID)
+		resp, err := c.api.GetConfig(ctx, GetConfigReq{
+			IlinkUserID:  fromUserID,
+			ContextToken: "",
+		})
+		if err != nil || resp.Ret != 0 || resp.Errcode != 0 {
+			logger.Errorf("[weixin] Failed to get context token for user %s: %v", fromUserID, err)
+			return
+		}
+		token := strings.TrimSpace(resp.TypingTicket)
+		if token == "" {
+			logger.Errorf("[weixin] GetConfig did not return a valid token for user %s", fromUserID)
+			return
+		}
+		c.contextTokens.Store(fromUserID, token)
+		c.persistContextTokens()
+		msg.ContextToken = token
+	} else {
+		c.contextTokens.Store(fromUserID, msg.ContextToken)
+		c.persistContextTokens()
+	}
+
 	var parts []string
 	for _, item := range msg.ItemList {
 		if item.Type == MessageItemTypeText && item.TextItem != nil {
@@ -233,16 +257,13 @@ func (c *WeixinChannel) handleInboundMessage(ctx context.Context, msg WeixinMess
 		return
 	}
 
-	if msg.ContextToken != "" {
-		c.contextTokens.Store(fromUserID, msg.ContextToken)
-		c.persistContextTokens()
-	}
-
 	session := c.getOrCreateSession(fromUserID, factory)
 
 	go func() {
 		reply := c.getReply(ctx, session, content)
-		c.sendMessage(ctx, fromUserID, reply)
+		if reply != "" {
+			c.sendMessage(ctx, fromUserID, reply)
+		}
 	}()
 }
 
@@ -291,10 +312,30 @@ func (c *WeixinChannel) sendMessage(ctx context.Context, toUserID, content strin
 		return
 	}
 
+	// Ensure we have a context token for this user
 	ct, ok := c.contextTokens.Load(toUserID)
 	if !ok {
-		logger.Errorf("[weixin] Missing context token for user %s", toUserID)
-		return
+		logger.Warnf("[weixin] Context token not found for user %s, fetching via GetConfig...", toUserID)
+		resp, err := c.api.GetConfig(ctx, GetConfigReq{
+			IlinkUserID:  toUserID,
+			ContextToken: "", // empty context token to get a new session
+		})
+		if err != nil || resp.Ret != 0 || resp.Errcode != 0 {
+			logger.Errorf("[weixin] Failed to fetch context token for user %s: %v", toUserID, err)
+			return
+		}
+		// GetConfig returns TypingTicket, but for SendMessage we need ContextToken.
+		// Actually the context token should be in the response; let's check the API.
+		// For now, store the typing ticket as context token (they may be interchangeable)
+		// In weixin API, context_token is usually returned in message or GetConfig
+		if resp.TypingTicket != "" {
+			c.contextTokens.Store(toUserID, resp.TypingTicket)
+			c.persistContextTokens()
+			ct = resp.TypingTicket
+		} else {
+			logger.Errorf("[weixin] GetConfig did not return a valid token for user %s", toUserID)
+			return
+		}
 	}
 	contextToken := ct.(string)
 

@@ -321,6 +321,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 	qe.resetForNewQuery()
 
 	// Main query loop
+	timeoutRecoveryCount := 0
 	for qe.currentTurn < qe.effectiveMaxTurns() {
 		qe.currentTurn++
 
@@ -445,7 +446,13 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 			if isTimeoutError(err) {
 				recovered, retryErr := qe.tryRecoverFromTimeout(ctx, err)
 				if recovered {
-					qe.logger.Warn("[⏱️  Recovered from timeout — retrying with reduced context]")
+					timeoutRecoveryCount++
+					if timeoutRecoveryCount > 2 {
+						qe.logger.Warn("[⚠️  Timeout recovery exhausted — giving up after multiple attempts]")
+						qe.FlushTranscript()
+						return fmt.Errorf("API timeout unrecoverable after multiple recovery attempts: %w", err)
+					}
+					qe.logger.Warnf("[⏱️  Recovered from timeout (attempt %d/2) — retrying with reduced context]", timeoutRecoveryCount)
 					continue
 				}
 				if retryErr != nil {
@@ -1308,10 +1315,22 @@ func isTimeoutError(err error) bool {
 //
 // Returns (recovered=true, nil) on success, (recovered=false, err) on failure.
 func (qe *QueryEngine) tryRecoverFromTimeout(ctx context.Context, err error) (bool, error) {
+	// Check context first — if it's already done, recovery is impossible
+	if err := ctx.Err(); err != nil {
+		qe.logger.Warn("[⏱️  Context expired/cancelled — cannot recover from timeout]")
+		return false, err
+	}
+
 	qe.logger.Infof("[⏱️  Request timeout detected, attempting context reduction recovery]\n")
 
 	if qe.verbose {
 		qe.logger.Infof("[Current context: %d messages]", len(qe.messages))
+	}
+
+	// Step 0: Handle zero-message timeouts (nothing to snip/compact)
+	if len(qe.messages) == 0 {
+		qe.logger.Debug("[⚠️  Timeout on empty context — nothing to reduce]")
+		return false, nil
 	}
 
 	// Step 1: Aggressive snip — keep only last few messages

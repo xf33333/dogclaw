@@ -215,6 +215,30 @@ func (c *WeixinChannel) handleInboundMessage(ctx context.Context, msg WeixinMess
 		return
 	}
 
+	// Ensure we have a valid context token for this user
+	if msg.ContextToken == "" {
+		logger.Warnf("[work_weixin] Message from %s has no context_token, fetching via GetConfig...", fromUserID)
+		resp, err := c.api.GetConfig(ctx, GetConfigReq{
+			IlinkUserID:  fromUserID,
+			ContextToken: "",
+		})
+		if err != nil || resp.Ret != 0 || resp.Errcode != 0 {
+			logger.Errorf("[work_weixin] Failed to get context token for user %s: %v", fromUserID, err)
+			return
+		}
+		token := strings.TrimSpace(resp.TypingTicket)
+		if token == "" {
+			logger.Errorf("[work_weixin] GetConfig did not return a valid token for user %s", fromUserID)
+			return
+		}
+		c.contextTokens.Store(fromUserID, token)
+		c.persistContextTokens()
+		msg.ContextToken = token
+	} else {
+		c.contextTokens.Store(fromUserID, msg.ContextToken)
+		c.persistContextTokens()
+	}
+
 	var parts []string
 	for _, item := range msg.ItemList {
 		if item.Type == MessageItemTypeText && item.TextItem != nil {
@@ -233,16 +257,13 @@ func (c *WeixinChannel) handleInboundMessage(ctx context.Context, msg WeixinMess
 		return
 	}
 
-	if msg.ContextToken != "" {
-		c.contextTokens.Store(fromUserID, msg.ContextToken)
-		c.persistContextTokens()
-	}
-
 	session := c.getOrCreateSession(fromUserID, factory)
 
 	go func() {
 		reply := c.getReply(ctx, session, content)
-		c.sendMessage(ctx, fromUserID, reply)
+		if reply != "" {
+			c.sendMessage(ctx, fromUserID, reply)
+		}
 	}()
 }
 

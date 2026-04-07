@@ -39,7 +39,7 @@ const (
 
 	// Timeout for context deadline exceeded funnel retry
 	defaultTimeout    = 10 * time.Minute // default HTTP client timeout
-	maxFunnelDuration = 10 * time.Minute // max total time for retry funnel
+	maxFunnelDuration = 1 * time.Minute  // max total time for retry funnel
 )
 
 // doWithFunnelRetry performs timed retries with fixed 1-second delays.
@@ -73,7 +73,7 @@ func (c *Client) doWithFunnelRetry(ctx context.Context, fn func(context.Context)
 			return nil, err
 		}
 
-		logger.Debug("[FunnelRetry] Timeout at attempt %d, continuing...", attempt)
+		logger.Info("[FunnelRetry] Timeout at attempt %d, continuing...", attempt)
 	}
 
 	return nil, fmt.Errorf("timeout: funnel retry exhausted")
