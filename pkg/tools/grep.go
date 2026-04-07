@@ -67,40 +67,77 @@ func (t *GrepTool) Call(ctx context.Context, input map[string]any, toolCtx types
 		}, nil
 	}
 
-	// Build ripgrep command
-	args := []string{"rg"}
-
-	if outputMode, ok := input["output_mode"].(string); ok && outputMode == "files_with_matches" {
-		args = append(args, "-l")
-	}
-
-	if caseSensitive, ok := input["case_sensitive"].(bool); !ok || !caseSensitive {
-		args = append(args, "-i") // case insensitive by default
-	}
-
-	if maxResults, ok := input["max_results"].(int); ok && maxResults > 0 {
-		args = append(args, "-m", fmt.Sprintf("%d", maxResults))
-	} else {
-		args = append(args, "-m", "50") // default limit
-	}
-
-	if glob, ok := input["glob"].(string); ok && glob != "" {
-		args = append(args, "-g", glob)
-	}
-
-	args = append(args, "--line-number")
-	args = append(args, pattern)
-
+	searchPath := "."
 	if path, ok := input["path"].(string); ok && path != "" {
-		args = append(args, path)
-	} else {
-		args = append(args, ".")
+		searchPath = path
 	}
 
-	cmd := fmt.Sprintf("%s 2>&1", strings.Join(args, " "))
-
-	// Execute via bash
 	bashTool := NewBashTool()
+
+	// Check if rg is available
+	checkCmd := "rg --version > /dev/null 2>&1"
+	checkResult, _ := bashTool.Call(ctx, map[string]any{"command": checkCmd}, toolCtx, nil)
+	useRipgrep := !checkResult.IsError
+
+	var cmd string
+	if useRipgrep {
+		// Build ripgrep command
+		var args []string
+		args = append(args, "rg")
+
+		if outputMode, ok := input["output_mode"].(string); ok && outputMode == "files_with_matches" {
+			args = append(args, "-l")
+		}
+
+		if caseSensitive, ok := input["case_sensitive"].(bool); !ok || !caseSensitive {
+			args = append(args, "-i") // case insensitive by default
+		}
+
+		if maxResults, ok := input["max_results"].(int); ok && maxResults > 0 {
+			args = append(args, "-m", fmt.Sprintf("%d", maxResults))
+		} else {
+			args = append(args, "-m", "50") // default limit
+		}
+
+		if glob, ok := input["glob"].(string); ok && glob != "" {
+			args = append(args, "-g", QuoteShellArg(glob))
+		}
+
+		args = append(args, "--line-number")
+		args = append(args, QuoteShellArg(pattern))
+		args = append(args, QuoteShellArg(searchPath))
+
+		cmd = fmt.Sprintf("%s 2>&1", strings.Join(args, " "))
+	} else {
+		// Fallback to standard grep
+		var args []string
+		args = append(args, "grep", "-r", "-n")
+
+		if outputMode, ok := input["output_mode"].(string); ok && outputMode == "files_with_matches" {
+			args = append(args, "-l")
+		}
+
+		if caseSensitive, ok := input["case_sensitive"].(bool); !ok || !caseSensitive {
+			args = append(args, "-i")
+		}
+
+		// Standard grep doesn't have an easy -m flag across all platforms, but we can use head
+		limit := 50
+		if maxResults, ok := input["max_results"].(int); ok && maxResults > 0 {
+			limit = maxResults
+		}
+
+		if glob, ok := input["glob"].(string); ok && glob != "" {
+			args = append(args, "--include", QuoteShellArg(glob))
+		}
+
+		args = append(args, QuoteShellArg(pattern))
+		args = append(args, QuoteShellArg(searchPath))
+
+		cmd = fmt.Sprintf("%s 2>&1 | head -n %d", strings.Join(args, " "), limit)
+	}
+
+	// Execute via bash tool
 	result, err := bashTool.Call(ctx, map[string]any{"command": cmd}, toolCtx, nil)
 	if err != nil {
 		return &types.ToolResult{
@@ -109,18 +146,23 @@ func (t *GrepTool) Call(ctx context.Context, input map[string]any, toolCtx types
 		}, nil
 	}
 
+	// Correctly pass through result data and error status
 	output := result.Data.(string)
-	if strings.Contains(output, "No matches found") || output == "" {
+
+	// In case of error (like file not found), result.IsError will be true
+	if result.IsError {
+		return result, nil
+	}
+
+	// Optimization for model feedback
+	if !strings.Contains(output, "\n") && output == "" {
 		return &types.ToolResult{
-			Data:    fmt.Sprintf("No matches found for pattern: %s", pattern),
+			Data:    fmt.Sprintf("No matches found for pattern: %s in %s", pattern, searchPath),
 			IsError: false,
 		}, nil
 	}
 
-	return &types.ToolResult{
-		Data:    output,
-		IsError: false,
-	}, nil
+	return result, nil
 }
 
 func (t *GrepTool) IsConcurrencySafe(input map[string]any) bool { return true }

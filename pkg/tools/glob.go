@@ -60,7 +60,7 @@ func (t *GlobTool) Call(ctx context.Context, input map[string]any, toolCtx types
 	}
 
 	// Use bash to execute glob (Go's filepath.Glob doesn't support **)
-	cmd := fmt.Sprintf("find %s -path '%s' 2>/dev/null | head -100", searchPath, pattern)
+	cmd := fmt.Sprintf("find %s -path %s 2>/dev/null | head -n 100", QuoteShellArg(searchPath), QuoteShellArg(pattern))
 
 	// Execute via bash tool
 	bashTool := NewBashTool()
@@ -72,26 +72,31 @@ func (t *GlobTool) Call(ctx context.Context, input map[string]any, toolCtx types
 		}, nil
 	}
 
+	// Correctly pass through result data and error status
+	if result.IsError {
+		return result, nil
+	}
+
 	// Parse results
 	output := result.Data.(string)
 	lines := strings.Split(output, "\n")
 	var files []string
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if line != "" && !strings.HasPrefix(line, "Command:") && !strings.HasPrefix(line, "Output:") {
+		if line != "" && !strings.Contains(line, "**Bash**") && !strings.Contains(line, "command:") && !strings.Contains(line, "output:") {
 			files = append(files, line)
 		}
 	}
 
 	if len(files) == 0 {
 		return &types.ToolResult{
-			Data:    fmt.Sprintf("No files found matching pattern: %s", pattern),
+			Data:    fmt.Sprintf("No files found matching pattern: %s in %s", pattern, searchPath),
 			IsError: false,
 		}, nil
 	}
 
 	return &types.ToolResult{
-		Data:    fmt.Sprintf("Found %d file(s) matching '%s':\n%s", len(files), pattern, strings.Join(files, "\n")),
+		Data:    fmt.Sprintf("Found %d file(s) matching '%s' in %s:\n%s", len(files), pattern, searchPath, strings.Join(files, "\n")),
 		IsError: false,
 	}, nil
 }
