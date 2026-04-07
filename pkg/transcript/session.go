@@ -151,7 +151,7 @@ func (sm *SessionManager) ListSessionsForCwd(projectDir string) ([]SessionSummar
 // scanProjectDir scans a project directory for .jsonl transcript files
 // and extracts summary metadata from each.
 func (sm *SessionManager) scanProjectDir(projectDir string) ([]SessionSummary, error) {
-	dirPath := filepath.Join(sm.baseDir, projectDir)
+	dirPath := filepath.Join(sm.baseDir, projectDir, "session")
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {
 		if os.IsNotExist(err) {

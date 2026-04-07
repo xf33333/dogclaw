@@ -62,11 +62,11 @@ func (pm *ProjectManager) GetTranscriptFile(sessionID, cwd string) *TranscriptFi
 // createTranscriptFile creates a new transcript file for a session
 func (pm *ProjectManager) createTranscriptFile(sessionID, cwd string) *TranscriptFile {
 	projectDir := pm.sanitizeCWDForPath(cwd)
-	sessionDir := filepath.Join(pm.baseDir, projectDir)
+	sessionDir := filepath.Join(pm.baseDir, projectDir, "session")
 
 	if err := os.MkdirAll(sessionDir, 0755); err != nil {
 		// Fall back to a safe directory name
-		sessionDir = filepath.Join(pm.baseDir, "unknown")
+		sessionDir = filepath.Join(pm.baseDir, "unknown", "session")
 		os.MkdirAll(sessionDir, 0755)
 	}
 
@@ -153,7 +153,8 @@ func (pm *ProjectManager) ListSessions() ([]SessionInfo, error) {
 		}
 
 		projectDir := entry.Name()
-		jsonlFiles, err := filepath.Glob(filepath.Join(pm.baseDir, projectDir, "*.jsonl"))
+		sessionDir := filepath.Join(pm.baseDir, projectDir, "session")
+		jsonlFiles, err := filepath.Glob(filepath.Join(sessionDir, "*.jsonl"))
 		if err != nil {
 			continue
 		}

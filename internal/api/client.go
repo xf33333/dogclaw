@@ -737,14 +737,16 @@ func (c *Client) doOpenAIRequest(ctx context.Context, endpoint string, body []by
 		return nil, c.wrapNetworkError(ctx, err)
 	}
 	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
 
 	if resp.StatusCode == http.StatusTooManyRequests {
-		respBody, _ := io.ReadAll(resp.Body)
 		return nil, &RateLimitError{StatusCode: resp.StatusCode, Body: string(respBody), RetryAfter: parseRetryAfter(resp)}
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
 		if retryableStatusCodes[resp.StatusCode] {
 			return nil, &TransientError{StatusCode: resp.StatusCode, Body: string(respBody)}
 		}
@@ -763,9 +765,22 @@ func (c *Client) doOpenAIRequest(ctx context.Context, endpoint string, body []by
 		return nil, fmt.Errorf("API error: %s - %s", resp.Status, string(respBody))
 	}
 
+	// Double check for error field even in 200 OK (some providers do this)
+	var errObj struct {
+		Error any `json:"error"`
+	}
+	if err := json.Unmarshal(respBody, &errObj); err == nil && errObj.Error != nil {
+		return nil, fmt.Errorf("API error (200 OK): %v", errObj.Error)
+	}
+
 	var openAIResp OpenAIResponse
-	if err := json.NewDecoder(resp.Body).Decode(&openAIResp); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+	if err := json.Unmarshal(respBody, &openAIResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w (body: %s)", err, string(respBody))
+	}
+
+	// Validate choices
+	if len(openAIResp.Choices) == 0 {
+		return nil, fmt.Errorf("API returned 200 OK with no choices: %s", string(respBody))
 	}
 
 	// Convert OpenAI response to Anthropic format
