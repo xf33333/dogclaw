@@ -34,20 +34,20 @@ func formatTruncated(s string, n int) string {
 
 // parsedToolCall represents a tool call extracted from text
 type parsedToolCall struct {
-	ID      string
-	Name    string
-	Command string
+	ID    string
+	Name  string
+	Input map[string]any
 }
 
 // parseToolUseFromText extracts <function=...> tags from text and returns tool calls.
 // Supports formats like: <function=Bash command="..."> or <function=Bash><parameter=command>...</parameter></function>
 func parseToolUseFromText(text string) []parsedToolCall {
 	var calls []parsedToolCall
-	
+
 	// Regex matches either <function=Name>...</function> or <function=Name ...>
 	reFunc := regexp.MustCompile(`(?s)<function=([a-zA-Z0-9_\-]+)([^>]*)>(.*?)</function>|<function=([a-zA-Z0-9_\-]+)([^>]*)>`)
 	matches := reFunc.FindAllStringSubmatch(text, -1)
-	
+
 	for _, m := range matches {
 		var toolName, attrs, inner string
 		if m[1] != "" {
@@ -63,51 +63,76 @@ func parseToolUseFromText(text string) []parsedToolCall {
 			continue
 		}
 
-		var command string
-		
-		// First try reading command from <parameter=command>...</parameter> in inner content
-		if inner != "" {
-			paramRe := regexp.MustCompile(`(?s)<parameter=command>(.*?)</parameter>`)
-			paramMatch := paramRe.FindStringSubmatch(inner)
-			if len(paramMatch) >= 2 {
-				// Get the content, trim leading/trailing newlines (trimming spaces might remove indentations)
-				command = regexp.MustCompile(`^\s*|\s*$`).ReplaceAllString(paramMatch[1], "")
-			}
-		}
+		inputArgs := make(map[string]any)
 
-		// If no command found yet, look in attrs (e.g. command="...")
-		if command == "" && attrs != "" {
-			cmdRe := regexp.MustCompile(`command="([^"]*)"`)
-			cmdMatch := cmdRe.FindStringSubmatch(attrs)
-			if len(cmdMatch) >= 2 {
-				command = cmdMatch[1]
-			} else {
-				cmdRe2 := regexp.MustCompile(`command='([^']*)'`)
-				cmdMatch2 := cmdRe2.FindStringSubmatch(attrs)
-				if len(cmdMatch2) >= 2 {
-					command = cmdMatch2[1]
+		// Parse inner parameters <parameter=name>value</parameter>
+		if inner != "" {
+			paramRe := regexp.MustCompile(`(?s)<parameter=([a-zA-Z0-9_\-]+)>(.*?)</parameter>`)
+			paramMatches := paramRe.FindAllStringSubmatch(inner, -1)
+			for _, pm := range paramMatches {
+				name := pm[1]
+				// Get the content, trim trailing/leading spaces without removing indentations
+				value := regexp.MustCompile(`^\s*|\s*$`).ReplaceAllString(pm[2], "")
+
+				// Try to unmarshal JSON (handles ints, bools, etc.). If it fails, keep as string.
+				var jsonVal any
+				if err := json.Unmarshal([]byte(value), &jsonVal); err == nil {
+					inputArgs[name] = jsonVal
+				} else {
+					inputArgs[name] = value
 				}
 			}
 		}
 
-		if command != "" {
-			calls = append(calls, parsedToolCall{
-				ID:      fmt.Sprintf("toolspec-%d", time.Now().UnixNano()),
-				Name:    toolName,
-				Command: command,
-			})
+		// Look in attrs (e.g. command="...")
+		if attrs != "" {
+			attrRe := regexp.MustCompile(`([a-zA-Z0-9_\-]+)=(?:"([^"]*)"|'([^']*)')`)
+			attrMatches := attrRe.FindAllStringSubmatch(attrs, -1)
+			for _, am := range attrMatches {
+				name := am[1]
+				value := am[2]
+				if value == "" {
+					value = am[3]
+				}
+				if _, exists := inputArgs[name]; !exists {
+					var jsonVal any
+					if err := json.Unmarshal([]byte(value), &jsonVal); err == nil {
+						inputArgs[name] = jsonVal
+					} else {
+						inputArgs[name] = value
+					}
+				}
+			}
 		}
+
+		calls = append(calls, parsedToolCall{
+			ID:    fmt.Sprintf("toolspec-%d", time.Now().UnixNano()),
+			Name:  toolName,
+			Input: inputArgs,
+		})
 	}
 	return calls
 }
 
-// extractTextBeforeToolUse removes any <function=...> tags and returns only the natural text part.
+// extractTextBeforeToolUse removes any <function=...> or <tool_call> tags and returns only the natural text part.
 func extractTextBeforeToolUse(text string) string {
-	idx := strings.Index(text, "<function=")
-	if idx == -1 {
+	idx1 := strings.Index(text, "<function=")
+	idx2 := strings.Index(text, "</tool_call>")
+	idx3 := strings.Index(text, "<tool_call>")
+
+	minIdx := -1
+	for _, idx := range []int{idx1, idx2, idx3} {
+		if idx != -1 {
+			if minIdx == -1 || idx < minIdx {
+				minIdx = idx
+			}
+		}
+	}
+
+	if minIdx == -1 {
 		return text
 	}
-	return strings.TrimSpace(text[:idx])
+	return strings.TrimSpace(text[:minIdx])
 }
 
 // extractToolCallsFromContent scans assistantContent for text blocks containing
@@ -125,12 +150,10 @@ func (qe *QueryEngine) extractToolCallsFromContent(assistantContent *[]api.Conte
 				// Convert to tool_use blocks
 				for _, bc := range extracted {
 					toolUseBlocks = append(toolUseBlocks, api.ContentBlock{
-						Type: "tool_use",
-						ID:   bc.ID,
-						Name: bc.Name,
-						Input: map[string]any{
-							"command": bc.Command,
-						},
+						Type:  "tool_use",
+						ID:    bc.ID,
+						Name:  bc.Name,
+						Input: bc.Input,
 					})
 				}
 				// Clean the text block
@@ -674,25 +697,14 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 			qe.addToolResult(toolUseID, string(resultStr), result.IsError)
 		}
 
-		// If showToolUsageInReply is enabled, append tool usage summary to the assistant's text
+		// If showToolUsageInReply is enabled, append tool usage summary to the cache for channels
+		// DO NOT modify assistantContent directly as it will pollute the LLM message history context.
 		if qe.showToolUsageInReply && len(toolUseBlocks) > 0 {
-			// Find the last text block to append the summary
-			foundText := false
-			for i := len(assistantContent) - 1; i >= 0; i-- {
-				if assistantContent[i].Type == "text" {
-					summary := "\n\n---\n**🔧 Tool Usage:**\n" + strings.Join(toolResults, "\n")
-					assistantContent[i].Text += summary
-					foundText = true
-					break
-				}
-			}
-			// If no text block exists, create one
-			if !foundText {
-				summary := "**🔧 Tool Usage:**\n" + strings.Join(toolResults, "\n")
-				assistantContent = append(assistantContent, api.ContentBlockParam{
-					Type: "text",
-					Text: summary,
-				})
+			summary := "\n\n---\n**🔧 Tool Usage:**\n" + strings.Join(toolResults, "\n")
+			if qe.lastAssistantText == "(正在执行工具操作…)" || qe.lastAssistantText == "" {
+				qe.lastAssistantText = "**🔧 Tool Usage:**\n" + strings.Join(toolResults, "\n")
+			} else {
+				qe.lastAssistantText += summary
 			}
 		}
 	}
@@ -1017,19 +1029,11 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 		}
 
 		if qe.showToolUsageInReply && len(toolUseBlocks) > 0 {
-			foundText := false
-			for i := len(assistantContent) - 1; i >= 0; i-- {
-				if assistantContent[i].Type == "text" {
-					assistantContent[i].Text += "\n\n---\n**🔧 Tool Usage:**\n" + strings.Join(toolResults, "\n")
-					foundText = true
-					break
-				}
-			}
-			if !foundText {
-				assistantContent = append(assistantContent, api.ContentBlockParam{
-					Type: "text",
-					Text: "**🔧 Tool Usage:**\n" + strings.Join(toolResults, "\n"),
-				})
+			summary := "\n\n---\n**🔧 Tool Usage:**\n" + strings.Join(toolResults, "\n")
+			if qe.lastAssistantText == "(正在执行工具操作…)" || qe.lastAssistantText == "" {
+				qe.lastAssistantText = "**🔧 Tool Usage:**\n" + strings.Join(toolResults, "\n")
+			} else {
+				qe.lastAssistantText += summary
 			}
 		}
 	}
