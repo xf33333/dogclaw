@@ -68,12 +68,28 @@ func (c *Client) doWithFunnelRetry(ctx context.Context, fn func(context.Context)
 			return resp, nil
 		}
 
-		if !isContextDeadlineExceeded(err) {
-			// Non-timeout error — don't continue funnel
-			return nil, err
+		if isContextDeadlineExceeded(err) {
+			logger.Info("[FunnelRetry] Timeout at attempt %d, continuing...", attempt)
+			continue
 		}
 
-		logger.Info("[FunnelRetry] Timeout at attempt %d, continuing...", attempt)
+		if isRateLimitError(err) {
+			// Hit rate limit during funnel — wait for Retry-After if available
+			delay := 1 * time.Second
+			if rle, ok := err.(*RateLimitError); ok && rle.RetryAfter > 0 {
+				delay = rle.RetryAfter
+			}
+			logger.Info("[FunnelRetry] Rate limit at attempt %d, waiting %v...", attempt, delay)
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			continue
+		}
+
+		// Non-retryable error — don't continue funnel
+		return nil, err
 	}
 
 	return nil, fmt.Errorf("timeout: funnel retry exhausted")
@@ -555,23 +571,26 @@ func (c *Client) sendAnthropicRequest(ctx context.Context, req *MessageRequest) 
 				retryAfter = c.calculateDelay(attempt)
 			}
 
-			// If remaining time is less than retry delay + buffer, fail early
+			// If remaining time is less than retry delay + buffer, enter funnel retry
 			if remaining > 0 && remaining < retryAfter+2*time.Second {
-				return nil, fmt.Errorf("rate limit retry aborted: insufficient time left in context (need ~%v, have %v)", (retryAfter + 2*time.Second).Round(time.Second), remaining.Round(time.Second))
+				logger.Info("[RateLimit] Context running low (%v), entering funnel retry to finish request...", remaining.Round(time.Millisecond))
+				goto enter_funnel
 			}
 
 			logger.Debug("[Retry] Waiting %v before next attempt...", retryAfter)
 			select {
 			case <-time.After(retryAfter):
 			case <-ctx.Done():
-				return nil, fmt.Errorf("context cancelled during retry: %w", ctx.Err())
+				logger.Info("[RateLimit] Context cancelled during wait, entering funnel retry...")
+				goto enter_funnel
 			}
 			continue
 		}
 
-		// Non-retryable error — but timeout errors get funnel retry
-		if isContextDeadlineExceeded(err) {
-			logger.Info("[Timeout] Entering funnel retry (window: %v)...", maxFunnelDuration)
+	enter_funnel:
+		// Non-retryable error — but timeout or rate limit errors get funnel retry
+		if isContextDeadlineExceeded(err) || isRateLimitError(err) {
+			logger.Info("[Funnel] Entering funnel retry (window: %v) to overcome timeout/rate-limit...", maxFunnelDuration)
 			funnelCtx, cancel := context.WithTimeout(context.Background(), maxFunnelDuration)
 			defer cancel()
 
