@@ -1111,6 +1111,7 @@ func (c *Client) convertFromOpenAIResponse(resp *OpenAIResponse) *MessageRespons
 	} else if blocks, ok := message.Content.([]any); ok {
 		for _, b := range blocks {
 			if m, ok := b.(map[string]any); ok {
+				// Standard format: { "type": "text", "text": "..." }
 				if t, ok := m["type"].(string); ok && t == "text" {
 					if text, ok := m["text"].(string); ok && text != "" {
 						contentBlocks = append(contentBlocks, ContentBlock{
@@ -1118,8 +1119,22 @@ func (c *Client) convertFromOpenAIResponse(resp *OpenAIResponse) *MessageRespons
 							Text: text,
 						})
 					}
+				} else if text, ok := m["text"].(string); ok && text != "" {
+					// Fallback: { "text": "..." }
+					contentBlocks = append(contentBlocks, ContentBlock{
+						Type: "text",
+						Text: text,
+					})
 				}
 			}
+		}
+	} else if m, ok := message.Content.(map[string]any); ok {
+		// Single object fallback
+		if text, ok := m["text"].(string); ok && text != "" {
+			contentBlocks = append(contentBlocks, ContentBlock{
+				Type: "text",
+				Text: text,
+			})
 		}
 	}
 
