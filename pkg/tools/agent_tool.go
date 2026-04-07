@@ -132,7 +132,7 @@ func (t *AgentTool) Call(ctx context.Context, input map[string]any, toolCtx type
 
 	// 返回结果
 	return &types.ToolResult{
-		Data:    fmt.Sprintf("Agent %s completed.\n\nResult: %s", agentType, result),
+		Data:    fmt.Sprintf("Agent %s completed.\n\nResult: %s", agentType, result.Output),
 		IsError: false,
 	}, nil
 }

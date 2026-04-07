@@ -40,39 +40,63 @@ type parsedToolCall struct {
 }
 
 // parseToolUseFromText extracts <function=...> tags from text and returns tool calls.
-// Supports formats like: <function=Bash command="..."> or <function=Read file="...">
+// Supports formats like: <function=Bash command="..."> or <function=Bash><parameter=command>...</parameter></function>
 func parseToolUseFromText(text string) []parsedToolCall {
 	var calls []parsedToolCall
-	// Regex to find <function=Name ...> (may have newlines before)
-	re := regexp.MustCompile(`<function=(\w+)(?:\s+[^>]*)?>`)
-	matches := re.FindAllStringSubmatch(text, -1)
+	
+	// Regex matches either <function=Name>...</function> or <function=Name ...>
+	reFunc := regexp.MustCompile(`(?s)<function=([a-zA-Z0-9_\-]+)([^>]*)>(.*?)</function>|<function=([a-zA-Z0-9_\-]+)([^>]*)>`)
+	matches := reFunc.FindAllStringSubmatch(text, -1)
+	
 	for _, m := range matches {
-		toolName := m[1]
-		// Extract the entire tag to parse attributes
-		fullTag := m[0]
-		// Extract command or other relevant attribute
-		cmdRe := regexp.MustCompile(`command="([^"]*)"`)
-		cmdMatches := cmdRe.FindStringSubmatch(fullTag)
-		if len(cmdMatches) < 2 {
-			// Also try single quotes
-			cmdRe2 := regexp.MustCompile(`command='([^']*)'`)
-			cmdMatches2 := cmdRe2.FindStringSubmatch(fullTag)
-			if len(cmdMatches2) >= 2 {
-				calls = append(calls, parsedToolCall{
-					ID:      fmt.Sprintf("toolspec-%d", time.Now().UnixNano()),
-					Name:    toolName,
-					Command: cmdMatches2[1],
-				})
-				continue
-			}
-			// Skip if no command
+		var toolName, attrs, inner string
+		if m[1] != "" {
+			// Matched <function=Name>...</function>
+			toolName = m[1]
+			attrs = m[2]
+			inner = m[3]
+		} else if m[4] != "" {
+			// Matched <function=Name ...>
+			toolName = m[4]
+			attrs = m[5]
+		} else {
 			continue
 		}
-		calls = append(calls, parsedToolCall{
-			ID:      fmt.Sprintf("toolspec-%d", time.Now().UnixNano()),
-			Name:    toolName,
-			Command: cmdMatches[1],
-		})
+
+		var command string
+		
+		// First try reading command from <parameter=command>...</parameter> in inner content
+		if inner != "" {
+			paramRe := regexp.MustCompile(`(?s)<parameter=command>(.*?)</parameter>`)
+			paramMatch := paramRe.FindStringSubmatch(inner)
+			if len(paramMatch) >= 2 {
+				// Get the content, trim leading/trailing newlines (trimming spaces might remove indentations)
+				command = regexp.MustCompile(`^\s*|\s*$`).ReplaceAllString(paramMatch[1], "")
+			}
+		}
+
+		// If no command found yet, look in attrs (e.g. command="...")
+		if command == "" && attrs != "" {
+			cmdRe := regexp.MustCompile(`command="([^"]*)"`)
+			cmdMatch := cmdRe.FindStringSubmatch(attrs)
+			if len(cmdMatch) >= 2 {
+				command = cmdMatch[1]
+			} else {
+				cmdRe2 := regexp.MustCompile(`command='([^']*)'`)
+				cmdMatch2 := cmdRe2.FindStringSubmatch(attrs)
+				if len(cmdMatch2) >= 2 {
+					command = cmdMatch2[1]
+				}
+			}
+		}
+
+		if command != "" {
+			calls = append(calls, parsedToolCall{
+				ID:      fmt.Sprintf("toolspec-%d", time.Now().UnixNano()),
+				Name:    toolName,
+				Command: command,
+			})
+		}
 	}
 	return calls
 }
@@ -84,6 +108,43 @@ func extractTextBeforeToolUse(text string) string {
 		return text
 	}
 	return strings.TrimSpace(text[:idx])
+}
+
+// extractToolCallsFromContent scans assistantContent for text blocks containing
+// <function=...> tags, converts them to tool_use blocks, and cleans the text.
+// It modifies assistantContent in-place and returns the extracted tool_use blocks.
+// If cleaning leaves an empty text block, it replaces it with a placeholder so that
+// the assistant message always contains some user-facing text.
+func (qe *QueryEngine) extractToolCallsFromContent(assistantContent *[]api.ContentBlockParam) []api.ContentBlock {
+	var toolUseBlocks []api.ContentBlock
+	for i := 0; i < len(*assistantContent); i++ {
+		block := (*assistantContent)[i]
+		if block.Type == "text" {
+			extracted := parseToolUseFromText(block.Text)
+			if len(extracted) > 0 {
+				// Convert to tool_use blocks
+				for _, bc := range extracted {
+					toolUseBlocks = append(toolUseBlocks, api.ContentBlock{
+						Type: "tool_use",
+						ID:   bc.ID,
+						Name: bc.Name,
+						Input: map[string]any{
+							"command": bc.Command,
+						},
+					})
+				}
+				// Clean the text block
+				cleaned := extractTextBeforeToolUse(block.Text)
+				if cleaned != "" {
+					(*assistantContent)[i].Text = cleaned
+				} else {
+					// Replace empty text with a placeholder so user sees something
+					(*assistantContent)[i].Text = "(正在执行工具操作…)"
+				}
+			}
+		}
+	}
+	return toolUseBlocks
 }
 
 // dumpMessageRequest prints the request details in verbose mode.
@@ -414,15 +475,12 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 		var toolUseDetails []string
 
 		// Process response - add text content and capture thinking
-		// Also keep track of raw text for fallback tool extraction
-		var rawTextBlocks []string
 		for _, block := range resp.Content {
 			if block.Type == "text" && block.Text != "" {
 				assistantContent = append(assistantContent, api.ContentBlockParam{
 					Type: "text",
 					Text: block.Text,
 				})
-				rawTextBlocks = append(rawTextBlocks, block.Text)
 			}
 			if block.Type == "thinking" && block.Text != "" {
 				if qe.showThinkingInLog {
@@ -440,27 +498,10 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 		}
 
 		// Fallback: if no tool_use blocks but text contains <function=...> tags,
-		// parse them and create tool_use blocks manually.
+		// parse them, create tool_use blocks, and clean the text.
 		if len(toolUseBlocks) == 0 {
-			for _, text := range rawTextBlocks {
-				extracted := parseToolUseFromText(text)
-				if len(extracted) > 0 {
-					// Convert to api.ContentBlock
-					for _, bc := range extracted {
-						toolUseBlocks = append(toolUseBlocks, api.ContentBlock{
-							Type: "tool_use",
-							ID:   bc.ID,
-							Name: bc.Name,
-							Input: map[string]any{
-								"command": bc.Command,
-							},
-						})
-					}
-					// Remove the tool call part from the corresponding text block
-					// (simplified: we'll just trim everything after first <function=...)
-					break // only process first text block for now
-				}
-			}
+			// Use in-place extraction which also cleans the text
+			toolUseBlocks = qe.extractToolCallsFromContent(&assistantContent)
 		}
 
 		if len(toolUseBlocks) > 0 {
@@ -495,8 +536,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 			})
 		}
 
-		// Record assistant message to transcript
-		// Send notification even if only tool_use blocks (no text) to ensure cli/qqchannel receives the message
+		// Record assistant message to transcript AND update lastAssistantText for channels
 		if len(assistantContent) > 0 {
 			var textParts []string
 			hasToolUse := false
@@ -509,15 +549,20 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 				}
 			}
 
-			// If we have text, send it as normal
+			// Determine user-facing text
+			var userText string
 			if len(textParts) > 0 {
-				assistantText := strings.Join(textParts, "\n\n")
-				qe.RecordMessageToTranscript(transcript.MessageTypeAssistant, "assistant", []byte(assistantText))
+				userText = strings.Join(textParts, "\n\n")
 			} else if hasToolUse {
-				// If only tool_use blocks (no text), send a placeholder notification
-				// This ensures cli/qqchannel will receive a message about tool execution
-				placeholder := "(正在执行工具操作…)"
-				qe.RecordMessageToTranscript(transcript.MessageTypeAssistant, "assistant", []byte(placeholder))
+				userText = "(正在执行工具操作…)"
+			}
+			// Update cache for channel retrieval
+			if userText != "" {
+				qe.lastAssistantText = userText
+			}
+			// Record to transcript
+			if userText != "" {
+				qe.RecordMessageToTranscript(transcript.MessageTypeAssistant, "assistant", []byte(userText))
 			}
 		}
 
@@ -853,8 +898,7 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 			})
 		}
 
-		// Record assistant message to transcript
-		// Send notification even if only tool_use blocks (no text) to ensure cli/qqchannel receives the message
+		// Record assistant message to transcript AND update lastAssistantText for channels
 		if len(assistantContent) > 0 {
 			var textParts []string
 			hasToolUse := false
@@ -867,32 +911,25 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 				}
 			}
 
-			// If we have text, send it as normal
+			// Determine user-facing text
+			var userText string
 			if len(textParts) > 0 {
-				assistantText := strings.Join(textParts, "\n\n")
-				qe.RecordMessageToTranscript(transcript.MessageTypeAssistant, "assistant", []byte(assistantText))
+				userText = strings.Join(textParts, "\n\n")
 			} else if hasToolUse {
-				// If only tool_use blocks (no text), send a placeholder notification
-				// This ensures cli/qqchannel will receive a message about tool execution
-				placeholder := "(正在执行工具操作…)"
-				qe.RecordMessageToTranscript(transcript.MessageTypeAssistant, "assistant", []byte(placeholder))
+				userText = "(正在执行工具操作…)"
+			}
+			// Update cache for channel retrieval
+			if userText != "" {
+				qe.lastAssistantText = userText
+			}
+			// Record to transcript
+			if userText != "" {
+				qe.RecordMessageToTranscript(transcript.MessageTypeAssistant, "assistant", []byte(userText))
 			}
 		}
 
 		if len(toolUseBlocks) == 0 {
-			// Capture final assistant text for retrieval (e.g., CLI output)
-			var finalTextParts []string
-			for _, block := range assistantContent {
-				if block.Type == "text" && block.Text != "" {
-					finalTextParts = append(finalTextParts, block.Text)
-				}
-			}
-			if len(finalTextParts) > 0 {
-				qe.lastAssistantText = strings.Join(finalTextParts, "\n\n")
-			} else {
-				qe.lastAssistantText = "(正在执行工具操作…)"
-			}
-
+			// No tools - reply already cached above
 			if qe.verbose {
 				qe.logger.Debug("[Response complete]")
 			}
@@ -1274,7 +1311,7 @@ func (qe *QueryEngine) tryRecoverFromTimeout(ctx context.Context, err error) (bo
 	}
 
 	// Step 1: Aggressive snip — keep only last few messages
-	preserveCount := 6
+	preserveCount := 5
 	if len(qe.messages) > preserveCount {
 		if qe.verbose {
 			qe.logger.Debugf("[🔄 Timeout recovery: Snip — keeping last %d messages (%d total)",
@@ -1309,69 +1346,138 @@ func (qe *QueryEngine) tryRecoverFromTimeout(ctx context.Context, err error) (bo
 		}
 	}
 
-	// Step 3: If compact is not viable or failed, return unrecoverable
-	// The caller (client-level retry) will handle further retries
-	return false, nil
+	// Step 3: Hard reset - drop conversation history, keep only last user message if present
+	// This guarantees recovery so the turn can retry with fresh context.
+	if qe.verbose {
+		qe.logger.Infof("[🔄 Timeout recovery: Hard reset – clearing conversation history]\n")
+	}
+	if len(qe.messages) >= 2 {
+		lastMsg := qe.messages[len(qe.messages)-1]
+		if lastMsg.Role == "user" {
+			qe.messages = []api.MessageParam{lastMsg}
+		} else {
+			qe.messages = make([]api.MessageParam, 0)
+		}
+	} else {
+		qe.messages = make([]api.MessageParam, 0)
+	}
+	return true, nil
 }
 
-// buildToolCallSummary creates a human-readable summary of a tool call.
+// buildToolCallSummary creates a human-readable summary of a tool call with Markdown formatting.
 func buildToolCallSummary(toolName string, input any) string {
 	inputMap, ok := input.(map[string]any)
 	if !ok {
 		return toolName
 	}
 
+	var sb strings.Builder
+	sb.WriteString("**")
+	sb.WriteString(toolName)
+	sb.WriteString("**\n")
+
 	switch toolName {
 	case "read_file":
 		if path, ok := inputMap["file_path"].(string); ok {
-			return fmt.Sprintf("读取 %s", path)
+			sb.WriteString("读取文件：`")
+			sb.WriteString(path)
+			sb.WriteString("`")
+			return sb.String()
 		}
 	case "write_file":
 		if path, ok := inputMap["file_path"].(string); ok {
-			return fmt.Sprintf("写入 %s", path)
+			sb.WriteString("写入文件：`")
+			sb.WriteString(path)
+			sb.WriteString("`")
+			if content, ok := inputMap["content"].(string); ok && len(content) > 0 {
+				sb.WriteString("\n内容：\n```\n")
+				sb.WriteString(truncateString(content, 200))
+				sb.WriteString("\n```")
+			}
+			return sb.String()
 		}
 	case "edit_file":
 		if path, ok := inputMap["file_path"].(string); ok {
-			return fmt.Sprintf("编辑 %s", path)
+			sb.WriteString("编辑文件：`")
+			sb.WriteString(path)
+			sb.WriteString("`")
+			if oldStr, ok := inputMap["old_str"].(string); ok && len(oldStr) > 0 {
+				sb.WriteString("\n原文本：\n```\n")
+				sb.WriteString(truncateString(oldStr, 100))
+				sb.WriteString("\n```")
+			}
+			if newStr, ok := inputMap["new_str"].(string); ok && len(newStr) > 0 {
+				sb.WriteString("\n新文本：\n```\n")
+				sb.WriteString(truncateString(newStr, 100))
+				sb.WriteString("\n```")
+			}
+			return sb.String()
 		}
 	case "bash":
 		if cmd, ok := inputMap["command"].(string); ok {
-			if len(cmd) > 80 {
-				cmd = cmd[:80] + "…"
-			}
-			return fmt.Sprintf("执行命令: %s", cmd)
+			sb.WriteString("执行命令：\n```bash\n")
+			sb.WriteString(truncateString(cmd, 300))
+			sb.WriteString("\n```")
+			return sb.String()
 		}
 	case "grep":
 		if pattern, ok := inputMap["pattern"].(string); ok {
+			sb.WriteString("搜索：`")
+			sb.WriteString(pattern)
+			sb.WriteString("`")
 			if path, ok := inputMap["path"].(string); ok {
-				return fmt.Sprintf("搜索 %s (路径: %s)", pattern, path)
+				sb.WriteString("\n路径：`")
+				sb.WriteString(path)
+				sb.WriteString("`")
 			}
-			return fmt.Sprintf("搜索 %s", pattern)
+			return sb.String()
 		}
 	case "glob":
 		if pattern, ok := inputMap["pattern"].(string); ok {
-			return fmt.Sprintf("查找文件 %s", pattern)
+			sb.WriteString("查找文件：`")
+			sb.WriteString(pattern)
+			sb.WriteString("`")
+			return sb.String()
 		}
 	case "web_search":
 		if query, ok := inputMap["query"].(string); ok {
-			return fmt.Sprintf("搜索网络: %s", query)
+			sb.WriteString("网络搜索：`")
+			sb.WriteString(query)
+			sb.WriteString("`")
+			return sb.String()
 		}
 	case "web_fetch":
 		if url, ok := inputMap["url"].(string); ok {
-			if len(url) > 60 {
-				url = url[:60] + "…"
-			}
-			return fmt.Sprintf("获取网页: %s", url)
+			sb.WriteString("获取网页：`")
+			sb.WriteString(truncateString(url, 60))
+			sb.WriteString("`")
+			return sb.String()
 		}
 	}
 
+	// Generic fallback: show all string parameters
+	first := true
 	for k, v := range inputMap {
 		if s, ok := v.(string); ok && len(s) > 0 {
-			if len(s) > 60 {
-				s = s[:60] + "…"
+			if first {
+				first = false
+				sb.WriteString("\n")
+			} else {
+				sb.WriteString("\n")
 			}
-			return fmt.Sprintf("%s(%s=%s)", toolName, k, s)
+			sb.WriteString("`")
+			sb.WriteString(k)
+			sb.WriteString("`: ")
+			sb.WriteString(truncateString(s, 60))
 		}
 	}
-	return toolName
+	return sb.String()
+}
+
+// truncateString truncates a string to n characters with ellipsis if needed.
+func truncateString(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }

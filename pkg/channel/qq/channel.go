@@ -26,6 +26,8 @@ const (
 	dedupTTL      = 5 * time.Minute
 	dedupInterval = 60 * time.Second
 	dedupMaxSize  = 10000
+	// QQ Markdown消息限制（安全阈值）
+	maxMessageLength = 4500
 )
 
 // Config holds QQ bot configuration
@@ -432,4 +434,18 @@ func trimBotMention(content string) string {
 	re := regexp.MustCompile(`<@!\d+>`)
 	content = re.ReplaceAllString(content, "")
 	return strings.TrimSpace(content)
+}
+
+// truncateMessage truncates content to fit QQ message limits
+func (c *Channel) truncateMessage(content string) string {
+	if len(content) <= maxMessageLength {
+		return content
+	}
+	// 在Markdown中,我们希望在代码块边界截断
+	truncated := content[:maxMessageLength-3] + "..."
+	if c.cfg.SendMarkdown {
+		// 确保Markdown代码块闭合
+		truncated = strings.TrimSuffix(truncated, "```")
+	}
+	return truncated
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -851,18 +852,41 @@ func (qe *QueryEngine) findMostRecentSessionForCwd(sessions []transcript.Session
 	return best.SessionID
 }
 
-// normalizeSessionPath converts a cwd to the same format used in transcript.ProjectManager
+// normalizeSessionPath converts a cwd to the sanitized directory name used for transcript storage.
+// It applies the same sanitization logic as transcript.ProjectManager.sanitizeCWDForPath.
 func normalizeSessionPath(cwd string) string {
 	if cwd == "" {
 		return "no-cwd"
 	}
-	// Match the sanitize logic from transcript.project.go
-	home, _ := os.UserHomeDir()
-	if strings.HasPrefix(cwd, home) {
-		cwd = strings.TrimPrefix(cwd, home)
-		cwd = "~" + cwd
+
+	// Sanitize to a safe directory name (match transcript.ProjectManager.sanitizeCWDForPath)
+	// Replace path separators with underscores
+	safe := strings.ReplaceAll(cwd, string(filepath.Separator), "_")
+	safe = strings.ReplaceAll(safe, "/", "_")
+	safe = strings.ReplaceAll(safe, "\\", "_")
+
+	// Replace Windows drive colon (for ~/C_... pattern)
+	if len(safe) > 1 && safe[1] == ':' {
+		safe = safe[:1] + "_" + safe[2:]
 	}
-	return cwd
+
+	// Remove or replace any remaining problematic characters
+	re := regexp.MustCompile(`[^a-zA-Z0-9_.-]`)
+	safe = re.ReplaceAllString(safe, "_")
+
+	// Collapse multiple underscores
+	for strings.Contains(safe, "__") {
+		safe = strings.ReplaceAll(safe, "__", "_")
+	}
+
+	// Trim leading/trailing underscores
+	safe = strings.Trim(safe, "_")
+
+	if safe == "" {
+		safe = "unknown"
+	}
+
+	return safe
 }
 
 // restoreTranscriptMetadata reads metadata from transcript and restores engine settings

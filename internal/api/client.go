@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"dogclaw/internal/logger"
+
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -94,6 +96,7 @@ const (
 	ProviderAnthropic  ProviderType = "anthropic"
 	ProviderOpenRouter ProviderType = "openrouter"
 	ProviderOpenAI     ProviderType = "openai"
+	ProviderOllama     ProviderType = "ollama"
 )
 
 // Client is the API client (supports Anthropic and OpenRouter/OpenAI compatible APIs)
@@ -200,6 +203,13 @@ func detectProvider(baseURL, model string) ProviderType {
 	}
 	if strings.Contains(baseURLLower, "openai") {
 		return ProviderOpenAI
+	}
+	// Ollama detection: localhost:11434 or 127.0.0.1:11434 or contains "ollama"
+	if strings.Contains(baseURLLower, "ollama") ||
+		strings.Contains(baseURLLower, "127.0.0.1:11434") ||
+		strings.Contains(baseURLLower, "localhost:11434") ||
+		strings.HasSuffix(baseURLLower, ":11434") {
+		return ProviderOllama
 	}
 
 	// Fallback: check model name
@@ -473,6 +483,8 @@ func (c *Client) SendMessage(ctx context.Context, req *MessageRequest) (*Message
 	switch c.Provider {
 	case ProviderOpenRouter, ProviderOpenAI:
 		return c.sendOpenAICompatibleRequest(ctx, req)
+	case ProviderOllama:
+		return c.sendOllamaRequest(ctx, req)
 	default:
 		return c.sendAnthropicRequest(ctx, req)
 	}
@@ -621,8 +633,9 @@ func (c *Client) sendOpenAICompatibleRequest(ctx context.Context, req *MessageRe
 	if strings.HasSuffix(c.BaseURL, "/v1") {
 		endpoint = c.BaseURL + "/chat/completions"
 	}
-
-	logger.Info("[OpenRouter] POST %s", endpoint)
+	fmt.Println(endpoint)
+	logrus.Debug(endpoint)
+	logrus.Infof("[OpenRouter] POST %s", endpoint)
 
 	// Track consecutive failures for leaky bucket adjustment
 	var consecutiveTimeouts int
@@ -966,6 +979,102 @@ func (c *Client) convertTools(req *MessageRequest) []OpenAITool {
 	}
 
 	return tools
+}
+
+// sendOllamaRequest sends a request to Ollama API (http://localhost:11434/api/chat)
+func (c *Client) sendOllamaRequest(ctx context.Context, req *MessageRequest) (*MessageResponse, error) {
+	// Build Ollama request body
+	type ollamaMessage struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+	type ollamaReq struct {
+		Model    string            `json:"model"`
+		Messages []ollamaMessage   `json:"messages"`
+		Stream   bool              `json:"stream"`
+	}
+	ollamaMessages := make([]ollamaMessage, 0, len(req.Messages))
+	for _, m := range req.Messages {
+		// Concatenate content blocks into plain text
+		var content strings.Builder
+		if text, ok := m.Content.(string); ok {
+			content.WriteString(text)
+		} else if blocks, ok := m.Content.([]ContentBlockParam); ok {
+			for _, b := range blocks {
+				if b.Type == "text" {
+					content.WriteString(b.Text)
+				}
+			}
+		}
+		ollamaMessages = append(ollamaMessages, ollamaMessage{
+			Role:    m.Role,
+			Content: content.String(),
+		})
+	}
+	reqBody := ollamaReq{
+		Model:    req.Model,
+		Messages: ollamaMessages,
+		Stream:   false,
+	}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal ollama request: %w", err)
+	}
+
+	// Endpoint: BaseURL + /api/chat (handle trailing slash)
+	endpoint := strings.TrimSuffix(c.BaseURL, "/") + "/api/chat"
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create ollama request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	// Execute request
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return nil, c.wrapNetworkError(ctx, err)
+	}
+	defer resp.Body.Close()
+
+	// Check response status
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("ollama API error: %s - %s", resp.Status, string(respBody))
+	}
+
+	// Decode Ollama response
+	type ollamaResp struct {
+		Model     string          `json:"model"`
+		CreatedAt string          `json:"created_at"`
+		Message   ollamaMessage   `json:"message"`
+		Done      bool            `json:"done"`
+	}
+	var ollama struct {
+		Model     string          `json:"model"`
+		CreatedAt string          `json:"created_at"`
+		Message   ollamaMessage   `json:"message"`
+		Done      bool            `json:"done"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&ollama); err != nil {
+		return nil, fmt.Errorf("failed to decode ollama response: %w", err)
+	}
+
+	// Convert to Anthropic-style MessageResponse
+	messageResp := &MessageResponse{
+		ID:    fmt.Sprintf("ollama-%d", time.Now().UnixNano()),
+		Type:  "message",
+		Role:  "assistant",
+		Model: ollama.Model,
+		Content: []ContentBlock{
+			{
+				Type: "text",
+				Text: ollama.Message.Content,
+			},
+		},
+		StopReason: "end_turn",
+	}
+	// Ollama doesn't provide token counts, leave Usage zero
+	return messageResp, nil
 }
 
 // convertFromOpenAIResponse converts an OpenAI response to Anthropic format
