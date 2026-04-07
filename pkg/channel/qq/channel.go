@@ -253,6 +253,9 @@ func (c *Channel) getOrCreateSession(chatID, creator string, newEngine channel.E
 	engine.ToolCallCallback = func(toolName, summary string) {
 		sendFn(chatID, fmt.Sprintf("🔧 %s", summary))
 	}
+	
+	// Automatically resume latest session for this context
+	engine.AutoResumeLatestSession(context.Background())
 
 	sess := &ChatSession{
 		Engine:  engine,

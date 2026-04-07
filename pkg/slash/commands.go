@@ -221,6 +221,25 @@ func RegisterBuiltinCommands(registry *CommandRegistry) {
 		Source:      "builtin",
 		Handler:     HandleResume,
 	})
+
+	registry.Register(&Command{
+		Name:        "new",
+		Aliases:     []string{"n"},
+		Description: "Start a new session",
+		Type:        LocalCommand,
+		Source:      "builtin",
+		Handler:     func(ctx context.Context, args string) (*CommandResult, error) {
+			return &CommandResult{Output: ""}, nil // handled in engine
+		},
+	})
+	
+	registry.Register(&Command{
+		Name:        "reset",
+		Description: "Clear conversation history (alias of clear)",
+		Type:        LocalCommand,
+		Source:      "builtin",
+		Handler:     HandleClear, // reuses clear logic but we'll add it to engine switch too
+	})
 }
 
 // HandleHelp shows available commands
@@ -228,7 +247,10 @@ func HandleHelp(ctx context.Context, args string) (*CommandResult, error) {
 	return &CommandResult{
 		Output: `Available commands:
   /help          - Show this help message
-  /clear         - Clear conversation history
+  /sessions      - List all local sessions
+  /resume [id]   - Resume a specific session by ID or index
+  /new           - Start a completely new session
+  /reset         - Clear the conversation history for current session (same as /clear)
   /usage         - Show token usage and cost
   /model <name>  - Switch model (sonnet/opus/haiku)
   /compact       - Manually trigger context compaction

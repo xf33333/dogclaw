@@ -299,12 +299,17 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 	// Handle specific commands that modify engine state
 	name, _ := slash.ParseCommand(input)
 	switch strings.ToLower(name) {
-	case "clear":
+	case "clear", "reset":
 		qe.messages = make([]api.MessageParam, 0)
 		qe.currentTurn = 0
 		qe.usageTracker = &usage.AccumulatedUsage{}
 		qe.historyMgr.Init(qe.cwd, qe.sessionID)
 		qe.logger.Info(result.Output)
+
+	case "new":
+		msg := qe.StartNewSession(ctx)
+		qe.lastAssistantText = msg
+		// Handled entirely by StartNewSession which also logs it
 
 	case "model":
 		_, args := slash.ParseCommand(input)
@@ -680,6 +685,45 @@ func (qe *QueryEngine) handleResumeCommand(ctx context.Context, args string) (st
 	
 	msg := fmt.Sprintf("✅ Resumed session: %s\n   Messages: %d, Turns: %d", qe.sessionID, len(qe.messages), qe.currentTurn)
 	return msg, nil
+}
+
+// AutoResumeLatestSession automatically resumes the most recent session if one exists.
+func (qe *QueryEngine) AutoResumeLatestSession(ctx context.Context) error {
+	sessions, err := qe.listSessionsWithSummary(qe.cwd)
+	if err != nil || len(sessions) == 0 {
+		return nil // Normal behavior if no sessions exist
+	}
+	
+	sessionID := sessions[0].SessionID
+	err = qe.ResumeFromTranscript(sessionID)
+	if err != nil {
+		qe.logger.Errorf("Failed to auto-resume latest session: %v", err)
+		return err
+	}
+	
+	msg := fmt.Sprintf("♻️  Auto-resumed latest session: %s\n   Messages: %d, Turns: %d", qe.sessionID, len(qe.messages), qe.currentTurn)
+	qe.lastAssistantText = msg
+	qe.logger.Info(msg)
+	return nil
+}
+
+// StartNewSession creates a fresh session with a new ID
+func (qe *QueryEngine) StartNewSession(ctx context.Context) string {
+	qe.messages = make([]api.MessageParam, 0)
+	qe.currentTurn = 0
+	qe.usageTracker = &usage.AccumulatedUsage{}
+	
+	// Close current transcript file
+	qe.transcriptFile = nil
+	
+	// Generate new session ID
+	qe.sessionID = fmt.Sprintf("session-%d", time.Now().UnixMilli())
+	qe.historyMgr.Init(qe.cwd, qe.sessionID)
+	qe.initTranscript()
+	
+	msg := fmt.Sprintf("✅ Started new session: %s", qe.sessionID)
+	qe.logger.Info(msg)
+	return msg
 }
 
 // GetUsageTracker returns the current usage tracker
