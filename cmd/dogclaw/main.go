@@ -12,6 +12,8 @@ import (
 	"dogclaw/internal/config"
 	"dogclaw/pkg/channel"
 	"dogclaw/pkg/channel/qq"
+	"dogclaw/pkg/channel/weixin"
+	"dogclaw/pkg/commands"
 	"dogclaw/pkg/query"
 	"dogclaw/pkg/slash"
 	"dogclaw/pkg/terminal"
@@ -25,6 +27,7 @@ type StartupMode string
 const (
 	ModeAgent   StartupMode = "agent"
 	ModeGateway StartupMode = "gateway"
+	ModeOnboard StartupMode = "onboard"
 )
 
 func main() {
@@ -38,17 +41,19 @@ func main() {
 		fmt.Println("Usage: dogclaw <mode>")
 		fmt.Println("Modes:")
 		fmt.Println("  agent   - CLI interactive mode for direct communication")
-		fmt.Println("  gateway - Starts all configured channels (QQ, etc.)")
+		fmt.Println("  gateway - Starts all configured channels (QQ, Weixin, etc.)")
+		fmt.Println("  onboard - Interactive setup for models and channels")
 		os.Exit(1)
 	}
 
 	startupMode := StartupMode(args[0])
-	if startupMode != ModeAgent && startupMode != ModeGateway {
-		fmt.Printf("❌ Error: Invalid mode '%s'. Must be 'agent' or 'gateway'\n", args[0])
+	if startupMode != ModeAgent && startupMode != ModeGateway && startupMode != ModeOnboard {
+		fmt.Printf("❌ Error: Invalid mode '%s'. Must be 'agent', 'gateway' or 'onboard'\n", args[0])
 		fmt.Println("Usage: dogclaw <mode>")
 		fmt.Println("Modes:")
 		fmt.Println("  agent   - CLI interactive mode for direct communication")
-		fmt.Println("  gateway - Starts all configured channels (QQ, etc.)")
+		fmt.Println("  gateway - Starts all configured channels (QQ, Weixin, etc.)")
+		fmt.Println("  onboard - Interactive setup for models and channels")
 		os.Exit(1)
 	}
 
@@ -96,6 +101,12 @@ func main() {
 	case ModeGateway:
 		fmt.Println("🌐 Starting in GATEWAY mode (channel communication)...")
 		runGateway(cfg, settings)
+	case ModeOnboard:
+		fmt.Println("🚀 Starting in ONBOARD mode (setup)...")
+		if err := commands.RunOnboard(context.Background(), settings); err != nil {
+			fmt.Printf("❌ Onboarding failed: %v\n", err)
+			os.Exit(1)
+		}
 	}
 }
 
@@ -205,6 +216,16 @@ func runGateway(cfg *config.Config, settings *config.Settings) {
 			SendMarkdown: qqCfg.SendMarkdown,
 		})
 		channels = append(channels, ch)
+	}
+
+	// Weixin channel
+	if wxCfg := config.WeixinSettingsFromEnv(settings); wxCfg.Enabled && wxCfg.Token != "" {
+		ch, err := weixin.NewWeixinChannel(wxCfg)
+		if err != nil {
+			fmt.Printf("❌ Failed to initialize Weixin channel: %v\n", err)
+		} else {
+			channels = append(channels, ch)
+		}
 	}
 
 	if len(channels) == 0 {

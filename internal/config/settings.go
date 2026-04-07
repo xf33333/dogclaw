@@ -24,6 +24,9 @@ type ProviderModel struct {
 type ChannelSettings struct {
 	// QQ holds the QQ channel configuration
 	QQ *QQSettings `json:"qq,omitempty"`
+
+	// Weixin holds the Weixin channel configuration
+	Weixin *WeixinSettings `json:"weixin,omitempty"`
 }
 
 // Settings holds user's persistent configuration stored in ~/.docclaw/setting.json
