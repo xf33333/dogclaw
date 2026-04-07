@@ -63,13 +63,13 @@ func (t *BashTool) Call(ctx context.Context, input map[string]any, toolCtx types
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return &types.ToolResult{
-			Data:    fmt.Sprintf("Command: %s\nOutput: %s\nError: %v", command, string(output), err),
+			Data: fmt.Sprintf("**Bash**\n\ncommand: `%s`\n\noutput:\n%s\n\nerror: %v", command, strings.TrimSpace(string(output)), err),
 			IsError: true,
 		}, nil
 	}
 
 	return &types.ToolResult{
-		Data:    fmt.Sprintf("Command: %s\nOutput:\n%s", command, strings.TrimSpace(string(output))),
+		Data: fmt.Sprintf("**Bash**\n\ncommand: `%s`\n\noutput:\n%s", command, strings.TrimSpace(string(output))),
 		IsError: false,
 	}, nil
 }

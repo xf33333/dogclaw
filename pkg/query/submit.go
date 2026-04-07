@@ -1415,9 +1415,13 @@ func buildToolCallSummary(toolName string, input any) string {
 		}
 	case "bash":
 		if cmd, ok := inputMap["command"].(string); ok {
-			sb.WriteString("执行命令：\n```bash\n")
-			sb.WriteString(truncateString(cmd, 300))
-			sb.WriteString("\n```")
+			// Format: 🔧 **Bash**
+			//
+			// command: `go build -o /tmp/dogclaw ./cmd/dogclaw`
+			sb.WriteString("**Bash**\n\n")
+			sb.WriteString("command: `")
+			sb.WriteString(cmd)
+			sb.WriteString("`")
 			return sb.String()
 		}
 	case "grep":
