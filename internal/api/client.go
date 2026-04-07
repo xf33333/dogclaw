@@ -989,9 +989,9 @@ func (c *Client) sendOllamaRequest(ctx context.Context, req *MessageRequest) (*M
 		Content string `json:"content"`
 	}
 	type ollamaReq struct {
-		Model    string            `json:"model"`
-		Messages []ollamaMessage   `json:"messages"`
-		Stream   bool              `json:"stream"`
+		Model    string          `json:"model"`
+		Messages []ollamaMessage `json:"messages"`
+		Stream   bool            `json:"stream"`
 	}
 	ollamaMessages := make([]ollamaMessage, 0, len(req.Messages))
 	for _, m := range req.Messages {
@@ -1044,16 +1044,16 @@ func (c *Client) sendOllamaRequest(ctx context.Context, req *MessageRequest) (*M
 
 	// Decode Ollama response
 	type ollamaResp struct {
-		Model     string          `json:"model"`
-		CreatedAt string          `json:"created_at"`
-		Message   ollamaMessage   `json:"message"`
-		Done      bool            `json:"done"`
+		Model     string        `json:"model"`
+		CreatedAt string        `json:"created_at"`
+		Message   ollamaMessage `json:"message"`
+		Done      bool          `json:"done"`
 	}
 	var ollama struct {
-		Model     string          `json:"model"`
-		CreatedAt string          `json:"created_at"`
-		Message   ollamaMessage   `json:"message"`
-		Done      bool            `json:"done"`
+		Model     string        `json:"model"`
+		CreatedAt string        `json:"created_at"`
+		Message   ollamaMessage `json:"message"`
+		Done      bool          `json:"done"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&ollama); err != nil {
 		return nil, fmt.Errorf("failed to decode ollama response: %w", err)
@@ -1108,6 +1108,19 @@ func (c *Client) convertFromOpenAIResponse(resp *OpenAIResponse) *MessageRespons
 			Type: "text",
 			Text: content,
 		})
+	} else if blocks, ok := message.Content.([]any); ok {
+		for _, b := range blocks {
+			if m, ok := b.(map[string]any); ok {
+				if t, ok := m["type"].(string); ok && t == "text" {
+					if text, ok := m["text"].(string); ok && text != "" {
+						contentBlocks = append(contentBlocks, ContentBlock{
+							Type: "text",
+							Text: text,
+						})
+					}
+				}
+			}
+		}
 	}
 
 	// Convert tool_calls to tool_use content blocks
