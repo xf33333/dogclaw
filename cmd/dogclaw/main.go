@@ -1,0 +1,235 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+
+	"dogclaw/internal/api"
+	"dogclaw/internal/config"
+	"dogclaw/pkg/channel"
+	"dogclaw/pkg/channel/qq"
+	"dogclaw/pkg/query"
+	"dogclaw/pkg/slash"
+	"dogclaw/pkg/terminal"
+	"dogclaw/pkg/tools"
+	"dogclaw/pkg/types"
+)
+
+// StartupMode represents the mode the program runs in
+type StartupMode string
+
+const (
+	ModeAgent   StartupMode = "agent"
+	ModeGateway StartupMode = "gateway"
+)
+
+func main() {
+	// Print version / build info
+	PrintVersion()
+
+	args := os.Args[1:]
+
+	if len(args) == 0 {
+		fmt.Println("❌ Error: Mode is required")
+		fmt.Println("Usage: dogclaw <mode>")
+		fmt.Println("Modes:")
+		fmt.Println("  agent   - CLI interactive mode for direct communication")
+		fmt.Println("  gateway - Starts all configured channels (QQ, etc.)")
+		os.Exit(1)
+	}
+
+	startupMode := StartupMode(args[0])
+	if startupMode != ModeAgent && startupMode != ModeGateway {
+		fmt.Printf("❌ Error: Invalid mode '%s'. Must be 'agent' or 'gateway'\n", args[0])
+		fmt.Println("Usage: dogclaw <mode>")
+		fmt.Println("Modes:")
+		fmt.Println("  agent   - CLI interactive mode for direct communication")
+		fmt.Println("  gateway - Starts all configured channels (QQ, etc.)")
+		os.Exit(1)
+	}
+
+	// Load persistent settings from ~/.docclaw/setting.json
+	settings, err := config.LoadSettings()
+	if err != nil {
+		fmt.Printf("⚠️  Failed to load settings, using defaults: %v\n", err)
+		settings = config.DefaultSettings()
+	}
+
+	// Build config from settings
+	cfg, err := config.ConfigFromSettings(settings)
+	if err != nil {
+		fmt.Printf("⚠️  Active provider not found, using defaults: %v\n", err)
+		cfg = config.DefaultConfig()
+	}
+
+	// Get API key from environment (supports both ANTHROPIC_API_KEY and OPENROUTER_API_KEY)
+	apiKey := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
+	}
+	if apiKey == "" {
+		fmt.Println("⚠️  Warning: No API key found in ANTHROPIC_API_KEY or OPENROUTER_API_KEY")
+		return
+	}
+	cfg.APIKey = apiKey
+
+	// Debug: Print provider and key status
+	provider := settings.ActiveAlias
+	keyPreview := ""
+	if len(apiKey) > 10 {
+		keyPreview = apiKey[:5] + "..." + apiKey[len(apiKey)-4:]
+	} else {
+		keyPreview = apiKey
+	}
+	fmt.Printf("🔑 Using %s, provider: %s (Key: %s, BaseURL: %s, Model: %s)\n",
+		provider, provider, keyPreview, cfg.BaseURL, cfg.Model)
+
+	// Start based on mode
+	switch startupMode {
+	case ModeAgent:
+		fmt.Println("🤖 Starting in AGENT mode (CLI communication)...")
+		runAgent(cfg)
+	case ModeGateway:
+		fmt.Println("🌐 Starting in GATEWAY mode (channel communication)...")
+		runGateway(cfg, settings)
+	}
+}
+
+// runAgent starts the agent in CLI interactive mode
+func runAgent(cfg *config.Config) {
+	fmt.Println("🦞 DogClaw - AI Coding Assistant (Go Implementation)")
+	fmt.Println("Type your message or /help for commands. Ctrl+C to exit.")
+	fmt.Println()
+
+	// Initialize terminal manager with readline (supports Up/Down history, Ctrl+R search)
+	tm, err := terminal.New(nil)
+	if err != nil {
+		fmt.Printf("Failed to initialize terminal: %v\n", err)
+		return
+	}
+	defer tm.Close()
+
+	engineFactory := newEngineFactory(cfg)
+	qe := engineFactory()
+
+	// Try to resume the most recent session automatically
+	qe.AutoResumeLatestSession(context.Background())
+
+	// Interactive loop with readline
+	for {
+		input, err := tm.ReadLine()
+		if err != nil {
+			break // EOF or error
+		}
+
+		input = strings.TrimSpace(input)
+		if input == "" {
+			continue
+		}
+
+		// Handle exit commands natively
+		if slash.IsSlashCommand(input) {
+			cmd, _ := slash.ParseCommand(input)
+			if cmd == "exit" || cmd == "quit" || cmd == "q" {
+				tm.Println("👋 Goodbye!")
+				return
+			}
+		}
+
+		// Process everything through QueryEngine, which knows how to handle slash commands natively
+		ctx := context.Background()
+		err = qe.SubmitMessage(ctx, input)
+		if err != nil {
+			tm.Printf("Error: %v\n", err)
+			continue
+		}
+
+		// Print response
+		response := qe.GetLastAssistantText()
+		if response != "" {
+			tm.Println(response)
+		}
+	}
+}
+
+// buildTools returns the standard tool list
+func buildTools() []types.Tool {
+	return []types.Tool{
+		tools.NewBashTool(),
+		tools.NewFileReadTool(),
+		tools.NewFileWriteTool(),
+		tools.NewFileEditTool(),
+		tools.NewGrepTool(),
+		tools.NewGlobTool(),
+		tools.NewWebSearchTool(),
+	}
+}
+
+// newEngineFactory creates a factory function for building QueryEngine instances
+func newEngineFactory(cfg *config.Config) func() *query.QueryEngine {
+	return func() *query.QueryEngine {
+		client := api.NewClient(cfg.APIKey, cfg.Model, cfg.BaseURL)
+		toolList := buildTools()
+		systemPrompt := query.BuildSystemPrompt(toolList, "")
+		qe := query.NewQueryEngine(client, toolList, systemPrompt, cfg.MaxTurns)
+		qe.SetVerbose(cfg.Verbose)
+		qe.SetShowToolUsageInReply(cfg.ShowToolUsageInReply)
+		qe.SetShowThinkingInLog(cfg.ShowThinkingInLog)
+		if cfg.MaxBudgetUSD > 0 {
+			qe.SetMaxBudget(cfg.MaxBudgetUSD)
+		}
+		if cfg.MaxTokens > 0 {
+			qe.SetMaxTokens(cfg.MaxTokens)
+		}
+		return qe
+	}
+}
+
+// runGateway starts all configured channels (gateway mode)
+func runGateway(cfg *config.Config, settings *config.Settings) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var channels []channel.Interface
+
+	// QQ channel
+	if qqCfg := config.QQSettingsFromEnv(settings); qqCfg.Enabled && qqCfg.AppID != "" && qqCfg.AppSecret != "" {
+		ch := qq.NewChannel(qq.Config{
+			AppID:        qqCfg.AppID,
+			AppSecret:    qqCfg.AppSecret,
+			AllowFrom:    qqCfg.AllowFrom,
+			SendMarkdown: qqCfg.SendMarkdown,
+		})
+		channels = append(channels, ch)
+	}
+
+	if len(channels) == 0 {
+		fmt.Println("⚠️  No channels configured for gateway mode. Configure at least one channel (e.g., QQ) in environment.")
+		fmt.Println("Falling back to agent mode...")
+		runAgent(cfg)
+		return
+	}
+
+	// Start all channels
+	fmt.Printf("🚀 Starting %d channel(s)...\n", len(channels))
+	for _, ch := range channels {
+		if err := ch.Start(ctx, newEngineFactory(cfg)); err != nil {
+			fmt.Printf("❌ Failed to start channel: %v\n", err)
+		}
+	}
+
+	// Handle shutdown signals
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	sig := <-sigCh
+	fmt.Printf("\n📥 Received %v, shutting down...\n", sig)
+	cancel()
+	for _, ch := range channels {
+		ch.Stop()
+	}
+	fmt.Println("👋 All channels stopped.")
+}
