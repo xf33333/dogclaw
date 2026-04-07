@@ -248,6 +248,9 @@ func initLogger(cwd string) *logrus.Logger {
 	// Set custom formatter
 	logger.SetFormatter(&customFormatter{})
 
+	// Enable caller info (file:line)
+	logger.SetReportCaller(true)
+
 	// Set level (default Info, can be overridden by env LOG_LEVEL)
 	level := os.Getenv("LOG_LEVEL")
 	if level == "" {

@@ -88,6 +88,9 @@ func InitLogger() {
 		DisableColors:   false,
 	}
 
+	// Enable caller info (file:line)
+	global.SetReportCaller(true)
+
 	// Read LOG_LEVEL env var to set level (default: INFO)
 	if lvl, err := logrus.ParseLevel(os.Getenv("LOG_LEVEL")); err == nil {
 		global.SetLevel(lvl)

@@ -39,7 +39,7 @@ const (
 
 	// Timeout for context deadline exceeded funnel retry
 	defaultTimeout    = 10 * time.Minute // default HTTP client timeout
-	maxFunnelDuration = 1 * time.Minute  // max total time for retry funnel
+	maxFunnelDuration = 10 * time.Minute // max total time for retry funnel
 )
 
 // doWithFunnelRetry performs timed retries with fixed 1-second delays.
@@ -60,7 +60,12 @@ func (c *Client) doWithFunnelRetry(ctx context.Context, fn func(context.Context)
 			return nil, fmt.Errorf("funnel retry cancelled during wait: %w", ctx.Err())
 		}
 
-		logger.Info("[FunnelRetry] Attempt %d: retrying (waiting 1s)...", attempt)
+		remaining := time.Duration(0)
+		if dl, ok := ctx.Deadline(); ok {
+			remaining = time.Until(dl)
+		}
+
+		logger.Info("[FunnelRetry] Attempt %d: (Funnel left: %v), retrying (waiting 1s)...", attempt, remaining.Round(time.Second))
 
 		resp, err := fn(ctx)
 		if err == nil {
@@ -79,7 +84,7 @@ func (c *Client) doWithFunnelRetry(ctx context.Context, fn func(context.Context)
 			if rle, ok := err.(*RateLimitError); ok && rle.RetryAfter > 0 {
 				delay = rle.RetryAfter
 			}
-			logger.Info("[FunnelRetry] Rate limit at attempt %d, waiting %v...", attempt, delay)
+			logger.Info("[FunnelRetry] Rate limit at attempt %d, (Funnel left: %v), waiting %v...", attempt, remaining.Round(time.Second), delay)
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
@@ -92,7 +97,7 @@ func (c *Client) doWithFunnelRetry(ctx context.Context, fn func(context.Context)
 		return nil, err
 	}
 
-	return nil, fmt.Errorf("timeout: funnel retry exhausted")
+	return nil, fmt.Errorf("timeout: funnel window (%v) exhausted", maxFunnelDuration)
 }
 
 // HTTP status codes that are retryable (transient server errors)
