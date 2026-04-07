@@ -542,12 +542,12 @@ func IsAutoMemoryEnabled() bool {
 
 // sanitizePath sanitizes a path for use as a directory name.
 func sanitizePath(path string) string {
-	result := strings.ReplaceAll(path, string(filepath.Separator), "-")
-	result = strings.ReplaceAll(result, "/", "-")
-	result = strings.ReplaceAll(result, "\\", "-")
-	result = strings.Trim(result, "-")
-	for strings.Contains(result, "--") {
-		result = strings.ReplaceAll(result, "--", "-")
+	result := strings.ReplaceAll(path, string(filepath.Separator), "_")
+	result = strings.ReplaceAll(result, "/", "_")
+	result = strings.ReplaceAll(result, "\\", "_")
+	result = strings.Trim(result, "_")
+	for strings.Contains(result, "__") {
+		result = strings.ReplaceAll(result, "__", "_")
 	}
 	if result == "" {
 		result = "root"
