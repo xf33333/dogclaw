@@ -114,25 +114,27 @@ func parseToolUseFromText(text string) []parsedToolCall {
 	return calls
 }
 
+// removeToolCallTags removes all <function=...>...</function>, <function=...>, <tool_call>...</tool_call> tags
+// and returns the natural text parts (before, between, and after the tags).
+func removeToolCallTags(text string) string {
+	// Remove paired tags: <function...>...</function> or <tool_call>...</tool_call>
+	rePaired := regexp.MustCompile(`(?s)<(function|tool_call)(?:\s+[^>]*)?>.*?</\1>`)
+	cleaned := rePaired.ReplaceAllString(text, "")
+	// Remove self-closing tags: <function...> or <tool_call...>
+	reSelfClosing := regexp.MustCompile(`(?s)<(function|tool_call)(?:\s+[^>]*)?/>`)
+	cleaned = reSelfClosing.ReplaceAllString(cleaned, "")
+	// Remove opening tags without closing: <function=...> or <tool_call>
+	reOpenTag := regexp.MustCompile(`(?s)<(function|tool_call)(?:\s+[^>]*)?>`)
+	cleaned = reOpenTag.ReplaceAllString(cleaned, "")
+	// Trim leading/trailing whitespace
+	cleaned = strings.TrimSpace(cleaned)
+	return cleaned
+}
+
 // extractTextBeforeToolUse removes any <function=...> or <tool_call> tags and returns only the natural text part.
+// This is a wrapper for backward compatibility - it now preserves text before, between, and after tool call tags.
 func extractTextBeforeToolUse(text string) string {
-	idx1 := strings.Index(text, "<function=")
-	idx2 := strings.Index(text, "</tool_call>")
-	idx3 := strings.Index(text, "<tool_call>")
-
-	minIdx := -1
-	for _, idx := range []int{idx1, idx2, idx3} {
-		if idx != -1 {
-			if minIdx == -1 || idx < minIdx {
-				minIdx = idx
-			}
-		}
-	}
-
-	if minIdx == -1 {
-		return text
-	}
-	return strings.TrimSpace(text[:minIdx])
+	return removeToolCallTags(text)
 }
 
 // extractToolCallsFromContent scans assistantContent for text blocks containing
