@@ -18,8 +18,6 @@ import (
 	"time"
 
 	"dogclaw/internal/logger"
-
-	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -674,15 +672,15 @@ func (c *Client) sendOpenAICompatibleRequest(ctx context.Context, req *MessageRe
 	if strings.HasSuffix(c.BaseURL, "/v1") {
 		endpoint = c.BaseURL + "/chat/completions"
 	}
-	fmt.Println(endpoint)
-	logrus.Debug(endpoint)
-	logrus.Infof("[OpenRouter] POST %s", endpoint)
 
 	// Track consecutive failures for leaky bucket adjustment
 	var consecutiveTimeouts int
 
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		// Log attempt
+		logger.Debug("[OpenRouter] Sending request to %s (attempt %d/%d)...", endpoint, attempt+1, maxRetries+1)
+
 		// Wait for rate limiter before each attempt
 		if err := c.rateLimiter.Wait(ctx); err != nil {
 			return nil, fmt.Errorf("rate limiter wait failed: %w", err)

@@ -1,5 +1,7 @@
 # DogClaw 🦞
 
+**24小时 AI Agent** - Go语言实现，可运行在各种平台系统，50元以上机器都可运行
+
 Go implementation of Claude Code - an AI-powered coding assistant.
 
 ## Overview
@@ -13,39 +15,86 @@ This is a Go translation of the core functionality of [Claude Code](https://gith
 
 ## Features
 
+### 核心能力
+
+- **智能对话引擎**: 支持多轮对话，工具调用，流式响应
+- **多种API提供商**: 支持 Anthropic、OpenRouter 及任何 OpenAI 兼容接口
+- **自动会话管理**: 自动保存和恢复历史会话
+- **灵活配置**: YAML/JSON 配置文件，环境变量支持
+- **多平台运行**: 支持 Linux、macOS、Windows
+- **多通道支持**: QQ、微信等即时通讯平台集成
+
 ### Tools Implemented
 
-| Tool | Description |
-|------|-------------|
-| `Bash` | Execute shell commands |
-| `Read` | Read file contents |
-| `Write` | Create or overwrite files |
-| `Edit` | Partial file editing (string replacement) |
-| `Grep` | Search file contents with regex (ripgrep) |
-| `Glob` | Find files by pattern matching |
-| `WebSearch` | Search the web for information |
-| `WebFetch` | Fetch and extract URL content |
-| `TodoWrite` | Manage todo lists |
-| `TaskCreate/Update` | Track work items |
-| `SendMessage` | Inter-agent messaging |
-| `EnterPlanMode/ExitPlanMode` | Plan mode toggle |
-| `Sleep` | Wait for user input |
-| `NotebookEdit` | Edit Jupyter notebook cells |
-| `Exit` | Exit session |
+| Tool | Description | Status |
+|------|-------------|--------|
+| `Bash` | Execute shell commands | ✅ |
+| `Read` | Read file contents | ✅ |
+| `Write` | Create or overwrite files | ✅ |
+| `Edit` | Partial file editing (string replacement) | ✅ |
+| `Grep` | Search file contents with regex (ripgrep) | ✅ |
+| `Glob` | Find files by pattern matching | ✅ |
+| `WebSearch` | Search the web for information | ✅ |
+| `WebFetch` | Fetch and extract URL content | ✅ |
+| `TodoWrite` | Manage todo lists | ✅ |
+| `TaskCreate/Update` | Track work items | ✅ |
+| `SendMessage` | Inter-agent messaging | ✅ |
+| `EnterPlanMode/ExitPlanMode` | Plan mode toggle | ✅ |
+| `Sleep` | Wait for user input | ✅ |
+| `NotebookEdit` | Edit Jupyter notebook cells | ✅ |
+| `Exit` | Exit session | ✅ |
+| `MemoryRead/Write` | Persistent memory management | ✅ |
+| `AgentTool` | Load and execute other agents | ✅ |
+
+### 运行模式
+
+#### Agent 模式 (交互式 CLI)
+直接与 AI 助手对话，支持历史记录上下翻查 (readline)
+
+```bash
+./dogclaw agent
+```
+
+#### Gateway 模式 (通道网关)
+启动 QQ、微信等通道，接收消息并自动响应
+
+```bash
+./dogclaw gateway
+```
+
+#### Onboard 模式 (配置向导)
+交互式配置模型、通道和 API 设置
+
+```bash
+./dogclaw onboard
+```
 
 ### Architecture
 
 ```
 dogclaw/
-├── cmd/dogclaw/          # CLI entry point
+├── cmd/dogclaw/          # CLI entry point (main.go)
 ├── pkg/
-│   ├── types/             # Core type definitions
-│   ├── tools/             # Tool implementations
-│   └── query/             # Query engine
+│   ├── types/             # Core type definitions (Tool, Message, Permission)
+│   ├── tools/             # Tool implementations (25+ tools)
+│   ├── query/             # Query engine (conversation loop)
+│   ├── channel/           # Channel adapters (QQ, Weixin)
+│   │   ├── qq/           # QQ官方机器人API
+│   │   └── weixin/       # 微信公众号/企业微信
+│   ├── commands/          # CLI command system
+│   ├── terminal/          # Terminal UI with readline
+│   ├── memory/            # Persistent memory system
+│   ├── bootstrap/         # Bootstrapping and state management
+│   ├── coordinator/       # Multi-agent coordination
+│   ├── context/           # Context management
+│   ├── core/              # Core query engine logic
+│   ├── compact/           # Compact session storage
+│   ├── claudemd/          # Markdown rendering
+│   └── ink/               # Terminal styling
 ├── internal/
-│   ├── api/               # Anthropic API client
-│   ├── config/            # Configuration
-│   └── permission/        # Permission system
+│   ├── api/               # Anthropic/OpenRouter API client (streaming)
+│   ├── config/            # Configuration and settings management
+│   └── logger/            # Structured logging with caller info
 └── go.mod
 ```
 

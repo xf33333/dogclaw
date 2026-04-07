@@ -80,12 +80,24 @@ func WithFields(fields logrus.Fields) *logrus.Entry {
 // InitLogger initializes the global logger with standard configuration.
 // Should be called once at startup.
 func InitLogger() {
-	// Output to stderr, use text format with timestamp
+	// Output to stderr by default
 	global.Out = os.Stderr
+
+	// Check for GOCLAUDE_LOG_FILE environment variable
+	if logFile := os.Getenv("GOCLAUDE_LOG_FILE"); logFile != "" {
+		f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err == nil {
+			global.Out = f
+		} else {
+			// Fallback to stderr and log the error
+			global.Errorf("Failed to open log file %s: %v", logFile, err)
+		}
+	}
+
 	global.Formatter = &logrus.TextFormatter{
 		FullTimestamp:   true,
 		TimestampFormat: "2006-01-02 15:04:05",
-		DisableColors:   false,
+		DisableColors:   (os.Getenv("GOCLAUDE_LOG_FILE") != ""), // Disable colors if logging to file
 	}
 
 	// Enable caller info (file:line)

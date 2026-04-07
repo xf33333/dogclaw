@@ -455,6 +455,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 						return fmt.Errorf("API timeout unrecoverable after multiple recovery attempts: %w", err)
 					}
 					qe.logger.Warnf("[⏱️  Recovered from timeout (attempt %d/2) — retrying with reduced context]", timeoutRecoveryCount)
+					time.Sleep(500 * time.Millisecond) // Safety delay to prevent tight-loop bursts
 					continue
 				}
 				if retryErr != nil {
@@ -474,6 +475,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 			recovered, recoveryErr := qe.tryRecoverFromContextExceeded(ctx, err)
 			if recovered {
 				qe.logger.Warn("[🔄 Recovered from context length exceeded error]")
+				time.Sleep(500 * time.Millisecond) // Safety delay to prevent tight-loop bursts
 				continue // Retry with compacted messages
 			}
 			if recoveryErr != nil {
