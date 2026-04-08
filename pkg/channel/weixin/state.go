@@ -208,7 +208,10 @@ func (c *WeixinChannel) getTypingTicket(ctx context.Context, userID string) (str
 		ContextToken: contextToken,
 	})
 	if err == nil && resp != nil && resp.Ret == 0 && resp.Errcode == 0 {
-		ticket := strings.TrimSpace(resp.TypingTicket)
+		ticket := strings.TrimSpace(resp.ContextToken)
+		if ticket == "" {
+			ticket = strings.TrimSpace(resp.TypingTicket)
+		}
 		c.typingMu.Lock()
 		c.typingCache[userID] = typingTicketCacheEntry{
 			ticket:      ticket,

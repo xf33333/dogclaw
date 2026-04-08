@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -69,14 +68,14 @@ func deterministicWechatUIN(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	// Use first 4 bytes to generate a stable uint32 value
 	uint32Val := binary.BigEndian.Uint32(sum[:4])
-	return base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%d", uint32Val)))
+	return fmt.Sprintf("%d", uint32Val)
 }
 
 func randomWechatUIN() string {
 	var b [4]byte
 	_, _ = rand.Read(b[:])
 	uint32Val := binary.BigEndian.Uint32(b[:])
-	return base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%d", uint32Val)))
+	return fmt.Sprintf("%d", uint32Val)
 }
 
 func (c *ApiClient) post(ctx context.Context, endpoint string, body any, responseObj any) error {

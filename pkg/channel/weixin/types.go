@@ -179,6 +179,7 @@ type GetConfigReq struct {
 
 type GetConfigResp struct {
 	APIStatus
+	ContextToken string `json:"context_token,omitempty"`
 	TypingTicket string `json:"typing_ticket,omitempty"`
 }
 

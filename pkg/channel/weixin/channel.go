@@ -226,7 +226,10 @@ func (c *WeixinChannel) handleInboundMessage(ctx context.Context, msg WeixinMess
 			logger.Errorf("[weixin] Failed to get context token for user %s: %v", fromUserID, err)
 			return
 		}
-		token := strings.TrimSpace(resp.TypingTicket)
+		token := strings.TrimSpace(resp.ContextToken)
+		if token == "" {
+			token = strings.TrimSpace(resp.TypingTicket)
+		}
 		if token == "" {
 			logger.Errorf("[weixin] GetConfig did not return a valid token for user %s", fromUserID)
 			return
@@ -366,14 +369,18 @@ func (c *WeixinChannel) sendMessage(ctx context.Context, toUserID, content strin
 				toUserID, err, resp.Ret, resp.Errcode)
 			return "", false
 		}
-		if resp.TypingTicket == "" {
+		token := strings.TrimSpace(resp.ContextToken)
+		if token == "" {
+			token = strings.TrimSpace(resp.TypingTicket)
+		}
+		if token == "" {
 			logger.Errorf("[weixin] GetConfig returned empty token for user %s", toUserID)
 			return "", false
 		}
-		logger.Infof("[weixin] save %s ticket %s", toUserID, resp.TypingTicket)
-		c.contextTokens.Store(toUserID, resp.TypingTicket)
+		logger.Infof("[weixin] save %s token %s", toUserID, token)
+		c.contextTokens.Store(toUserID, token)
 		c.persistContextTokens()
-		return resp.TypingTicket, true
+		return token, true
 	}
 
 	buildReq := func(token string) SendMessageReq {
