@@ -126,8 +126,8 @@ func NewQueryEngine(client *api.Client, tools []types.Tool, systemPrompt string,
 	// Get current working directory
 	cwd, _ := os.Getwd()
 
-	// Initialize logger with logrus
-	logger := logger.CreateDailyRotatingLogger(cwd, true)
+	// Initialize logger with global logger
+	logger := logger.GetGlobalLogger()
 
 	// Initialize history manager
 	hm := history.GetHistoryManager()

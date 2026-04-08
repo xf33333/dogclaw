@@ -108,8 +108,8 @@ func (f *CustomFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 		msg = fmt.Sprintf("%s %v", entry.Message, entry.Context)
 	}
 
-	// Format: LEVEL-DATE-CALLER-MSG
-	line := fmt.Sprintf("%s-%s-%s %s\n", level, timestamp, caller, msg)
+	// Format: LEVEL-TIMESTAMP-CALLER-LINE-MESSAGE
+	line := fmt.Sprintf("%s-%s-%s-%s\n", level, timestamp, caller, msg)
 	return []byte(line), nil
 }
 
@@ -143,7 +143,7 @@ func DefaultConfig() *Config {
 		Level:              INFO,
 		LogDir:             "./logs",
 		OutputToStderr:     false,
-		UseCustomFormatter: false,
+		UseCustomFormatter: true,
 		EnableCaller:       true,
 		AsyncEnabled:       false,
 		AsyncBufferSize:    1000,
