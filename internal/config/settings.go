@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 const (
@@ -39,6 +40,11 @@ type Settings struct {
 
 	// Channel holds channel-specific configurations
 	Channel *ChannelSettings `json:"channel,omitempty"`
+
+	// Heartbeat configuration
+	EnableHeartbeat bool          `json:"enableHeartbeat"`          // 是否启用心跳机制
+	HeartbeatPeriod time.Duration `json:"heartbeatPeriod"`          // 心跳间隔（默认 1 分钟）
+	HeartbeatTimeout time.Duration `json:"heartbeatTimeout"`        // 心跳超时时间（超过此时间无活动则判断为中断）
 
 	// Other parameters
 	MaxTurns             int     `json:"maxTurns"`
@@ -83,16 +89,19 @@ func DefaultSettings() *Settings {
 				URL:      "https://",
 			},
 		},
-		MaxTurns:             1000,
-		MaxTokens:            8192,
-		MaxBudgetUSD:         0,
-		PermissionMode:       "default",
-		Verbose:              false,
-		Temperature:          0,
-		TopP:                 0,
-		ThinkingBudget:       0,
-		ShowToolUsageInReply: false,
-		ShowThinkingInLog:    true,
+		MaxTurns:              1000,
+		MaxTokens:             8192,
+		MaxBudgetUSD:          0,
+		PermissionMode:        "default",
+		Verbose:               false,
+		Temperature:           0,
+		TopP:                  0,
+		ThinkingBudget:        0,
+		ShowToolUsageInReply:  false,
+		ShowThinkingInLog:     true,
+		EnableHeartbeat:       false,    // 默认关闭心跳机制
+		HeartbeatPeriod:       time.Minute, // 默认 1 分钟
+		HeartbeatTimeout:      time.Minute * 2, // 默认 2 分钟超时
 	}
 }
 

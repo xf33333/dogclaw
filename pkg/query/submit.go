@@ -307,6 +307,12 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 		return err
 	}
 
+	// Start heartbeat monitoring if enabled
+	if qe.IsHeartbeatEnabled() {
+		qe.StartHeartbeat(ctx)
+		defer qe.StopHeartbeat()
+	}
+
 	// One-time memory initialization (semantic index + compaction)
 	qe.initMemoryIndex(ctx)
 	qe.tryCompactMemory(ctx)
@@ -323,6 +329,9 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 
 	// Record to transcript
 	qe.RecordMessageToTranscript(transcript.MessageTypeUser, "user", []byte(prompt))
+
+	// Update heartbeat after user message
+	qe.UpdateHeartbeat()
 
 	// Reset turn counter for per-query budget
 	qe.resetForNewQuery()
@@ -442,6 +451,9 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 			qe.logger.Debug("dumpMessageRequest1")
 		}
 
+		// Update heartbeat before API call
+		qe.UpdateHeartbeat()
+
 		// Call API
 		resp, err := qe.client.SendMessage(ctx, req)
 		if err == nil && qe.verbose {
@@ -449,6 +461,8 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 			qe.logger.Debug("dumpMessageResponse1")
 		}
 		if err != nil {
+			// Update heartbeat on error (still activity)
+			qe.UpdateHeartbeat()
 			// Handle context deadline exceeded (timeout) — retry with compacted messages
 			if isTimeoutError(err) {
 				recovered, retryErr := qe.tryRecoverFromTimeout(ctx, err)
@@ -481,7 +495,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 			if recovered {
 				qe.logger.Warn("[🔄 Recovered from context length exceeded error]")
 				time.Sleep(500 * time.Millisecond) // Safety delay to prevent tight-loop bursts
-				continue // Retry with compacted messages
+				continue                           // Retry with compacted messages
 			}
 			if recoveryErr != nil {
 				return recoveryErr
@@ -508,6 +522,9 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 				return fmt.Errorf("reached maximum budget ($%.2f)", qe.maxBudgetUSD)
 			}
 		}
+
+		// Update heartbeat after receiving response
+		qe.UpdateHeartbeat()
 
 		// Build assistant message content blocks
 		var assistantContent []api.ContentBlockParam
@@ -684,6 +701,9 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 			// Record tool call to transcript
 			qe.RecordToolCallToTranscript(toolUseID, toolName, inputMap)
 
+			// Update heartbeat before tool execution
+			qe.UpdateHeartbeat()
+
 			// Execute tool
 			toolCtx := types.ToolUseContext{
 				Cwd:             qe.cwd,
@@ -698,6 +718,9 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 				qe.RecordToolResultToTranscript(toolUseID, toolName, err.Error(), true)
 				continue
 			}
+
+			// Update heartbeat after tool execution
+			qe.UpdateHeartbeat()
 
 			// Log tool result summary
 			resultStr, _ := json.Marshal(result.Data)
@@ -718,6 +741,9 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 
 			// Add tool result
 			qe.addToolResult(toolUseID, string(resultStr), result.IsError)
+
+			// Update heartbeat after adding tool result
+			qe.UpdateHeartbeat()
 		}
 
 		// If showToolUsageInReply is enabled, append tool usage summary to the cache for channels
@@ -743,6 +769,12 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 	// Clear any previous assistant text for this session
 	qe.lastAssistantText = ""
 
+	// Start heartbeat monitoring if enabled
+	if qe.IsHeartbeatEnabled() {
+		qe.StartHeartbeat(ctx)
+		defer qe.StopHeartbeat()
+	}
+
 	// One-time memory initialization (semantic index + compaction)
 	qe.initMemoryIndex(ctx)
 	qe.tryCompactMemory(ctx)
@@ -750,6 +782,9 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 	// Main query loop
 	for qe.currentTurn < qe.maxTurns {
 		qe.currentTurn++
+
+		// Update heartbeat at start of each turn
+		qe.UpdateHeartbeat()
 
 		if qe.verbose {
 			qe.logger.Infof("[Turn %d/%d]", qe.currentTurn, qe.maxTurns)
@@ -832,12 +867,17 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 			logger.Debug("dumpMessageRequest2")
 		}
 
+		// Update heartbeat before API call
+		qe.UpdateHeartbeat()
+
 		resp, err := qe.client.SendMessage(ctx, req)
 		if err == nil && qe.verbose {
 			qe.dumpMessageResponse(resp)
 			logger.Debug("dumpMessageResponse2")
 		}
 		if err != nil {
+			// Update heartbeat on error
+			qe.UpdateHeartbeat()
 			// Handle context deadline exceeded (timeout) — retry with compacted messages
 			if isTimeoutError(err) {
 				recovered, retryErr := qe.tryRecoverFromTimeout(ctx, err)
@@ -869,7 +909,7 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 			return fmt.Errorf("API error: %w", err)
 		}
 
-		// Track usage
+		// Track usage from response
 		if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
 			tokenUsage := usage.TokenUsage{
 				InputTokens:              resp.Usage.InputTokens,
@@ -878,12 +918,19 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 				CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
 			}
 			qe.usageTracker.Add(tokenUsage)
+
+			// Update cost
 			pricing := usage.GetPricingForModel(qe.modelName)
 			qe.currentCost = qe.usageTracker.CalculateCost(pricing)
+
+			// Check budget
 			if qe.maxBudgetUSD > 0 && qe.currentCost >= qe.maxBudgetUSD {
 				return fmt.Errorf("reached maximum budget ($%.2f)", qe.maxBudgetUSD)
 			}
 		}
+
+		// Update heartbeat after receiving response
+		qe.UpdateHeartbeat()
 
 		var assistantContent []api.ContentBlockParam
 
@@ -1416,14 +1463,14 @@ func buildToolCallSummary(toolName string, input any) string {
 	sb.WriteString("**\n")
 
 	switch toolName {
-	case "read_file":
+	case "Read":
 		if path, ok := inputMap["file_path"].(string); ok {
 			sb.WriteString("读取文件：`")
 			sb.WriteString(path)
 			sb.WriteString("`")
 			return sb.String()
 		}
-	case "write_file":
+	case "Write":
 		if path, ok := inputMap["file_path"].(string); ok {
 			sb.WriteString("写入文件：`")
 			sb.WriteString(path)
@@ -1435,7 +1482,7 @@ func buildToolCallSummary(toolName string, input any) string {
 			}
 			return sb.String()
 		}
-	case "edit_file":
+	case "Edit":
 		if path, ok := inputMap["file_path"].(string); ok {
 			sb.WriteString("编辑文件：`")
 			sb.WriteString(path)
@@ -1452,7 +1499,7 @@ func buildToolCallSummary(toolName string, input any) string {
 			}
 			return sb.String()
 		}
-	case "bash":
+	case "Bash":
 		if cmd, ok := inputMap["command"].(string); ok {
 			// Format: 🔧 **Bash**
 			//
@@ -1463,7 +1510,7 @@ func buildToolCallSummary(toolName string, input any) string {
 			sb.WriteString("\n```")
 			return sb.String()
 		}
-	case "grep":
+	case "Grep":
 		if pattern, ok := inputMap["pattern"].(string); ok {
 			sb.WriteString("搜索：`")
 			sb.WriteString(pattern)
@@ -1475,21 +1522,21 @@ func buildToolCallSummary(toolName string, input any) string {
 			}
 			return sb.String()
 		}
-	case "glob":
+	case "Glob":
 		if pattern, ok := inputMap["pattern"].(string); ok {
 			sb.WriteString("查找文件：`")
 			sb.WriteString(pattern)
 			sb.WriteString("`")
 			return sb.String()
 		}
-	case "web_search":
+	case "WebSearch":
 		if query, ok := inputMap["query"].(string); ok {
 			sb.WriteString("网络搜索：`")
 			sb.WriteString(query)
 			sb.WriteString("`")
 			return sb.String()
 		}
-	case "web_fetch":
+	case "WebFetch":
 		if url, ok := inputMap["url"].(string); ok {
 			sb.WriteString("获取网页：`")
 			sb.WriteString(truncateString(url, 60))
@@ -1508,10 +1555,11 @@ func buildToolCallSummary(toolName string, input any) string {
 			} else {
 				sb.WriteString("\n")
 			}
-			sb.WriteString("`")
+			sb.WriteString("")
 			sb.WriteString(k)
-			sb.WriteString("`: ")
+			sb.WriteString(": `")
 			sb.WriteString(truncateString(s, 60))
+			sb.WriteString("`")
 		}
 	}
 	return sb.String()

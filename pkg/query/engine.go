@@ -109,6 +109,14 @@ type QueryEngine struct {
 	// prompt asking for a summary and allow one final turn before stopping.
 	queryLimitGraceMode bool
 
+	// Heartbeat mechanism
+	heartbeatEnabled  bool          // 是否启用心跳
+	heartbeatInterval time.Duration // 心跳检查间隔
+	heartbeatTimeout  time.Duration // 超时时间（超过此时间无响应则判断为中断）
+	lastActivityTime   time.Time    // 最后活动时间
+	heartbeatStopChan  chan struct{} // 停止心跳的 channel
+	heartbeatMu       sync.RWMutex // 保护心跳相关状态的锁
+
 	// logger is the logrus instance for structured logging
 	logger            *logrus.Logger
 	lastAssistantText string // cached text of most recent assistant reply (for channels)
@@ -189,6 +197,14 @@ func NewQueryEngine(client *api.Client, tools []types.Tool, systemPrompt string,
 		// Transcript system
 		transcriptProjectMgr: pm,
 		sessionManager:       sm,
+
+		// Heartbeat mechanism (disabled by default)
+		heartbeatEnabled:  false,
+		heartbeatInterval: time.Minute,
+		heartbeatTimeout:  time.Minute * 2,
+		lastActivityTime:   time.Now(),
+		heartbeatStopChan:  make(chan struct{}, 1),
+		heartbeatMu:       sync.RWMutex{},
 
 		// Logger
 		logger: logger,
@@ -721,6 +737,166 @@ func (qe *QueryEngine) SetMaxTokens(tokens int) {
 	if tokens > 0 {
 		qe.maxTokens = tokens
 	}
+}
+
+// SetHeartbeatEnabled sets whether the heartbeat mechanism is enabled
+func (qe *QueryEngine) SetHeartbeatEnabled(enabled bool) {
+	qe.heartbeatMu.Lock()
+	defer qe.heartbeatMu.Unlock()
+	qe.heartbeatEnabled = enabled
+}
+
+// SetHeartbeatInterval sets the heartbeat check interval
+func (qe *QueryEngine) SetHeartbeatInterval(interval time.Duration) {
+	qe.heartbeatMu.Lock()
+	defer qe.heartbeatMu.Unlock()
+	qe.heartbeatInterval = interval
+}
+
+// SetHeartbeatTimeout sets the timeout duration for heartbeat
+func (qe *QueryEngine) SetHeartbeatTimeout(timeout time.Duration) {
+	qe.heartbeatMu.Lock()
+	defer qe.heartbeatMu.Unlock()
+	qe.heartbeatTimeout = timeout
+}
+
+// UpdateHeartbeat updates the last activity timestamp
+func (qe *QueryEngine) UpdateHeartbeat() {
+	qe.heartbeatMu.Lock()
+	defer qe.heartbeatMu.Unlock()
+	qe.lastActivityTime = time.Now()
+}
+
+// StartHeartbeat starts the heartbeat monitoring goroutine
+func (qe *QueryEngine) StartHeartbeat(ctx context.Context) {
+	qe.heartbeatMu.Lock()
+	if qe.heartbeatEnabled && qe.heartbeatStopChan != nil {
+		qe.heartbeatMu.Unlock()
+		return // Already started
+	}
+	qe.heartbeatEnabled = true
+	qe.heartbeatStopChan = make(chan struct{}, 1)
+	qe.heartbeatMu.Unlock()
+
+	go qe.heartbeatLoop(ctx)
+}
+
+// StopHeartbeat stops the heartbeat monitoring goroutine
+func (qe *QueryEngine) StopHeartbeat() {
+	qe.heartbeatMu.Lock()
+	defer qe.heartbeatMu.Unlock()
+	if qe.heartbeatStopChan != nil {
+		select {
+		case qe.heartbeatStopChan <- struct{}{}:
+		default:
+		}
+		qe.heartbeatStopChan = nil
+	}
+	qe.heartbeatEnabled = false
+}
+
+// IsHeartbeatEnabled returns whether heartbeat is enabled
+func (qe *QueryEngine) IsHeartbeatEnabled() bool {
+	qe.heartbeatMu.RLock()
+	defer qe.heartbeatMu.RUnlock()
+	return qe.heartbeatEnabled
+}
+
+// GetHeartbeatStatus returns current heartbeat status information
+func (qe *QueryEngine) GetHeartbeatStatus() map[string]any {
+	qe.heartbeatMu.RLock()
+	defer qe.heartbeatMu.RUnlock()
+
+	lastActivity := qe.lastActivityTime
+	elapsed := time.Since(lastActivity)
+
+	return map[string]any{
+		"enabled":    qe.heartbeatEnabled,
+		"interval":   qe.heartbeatInterval.String(),
+		"timeout":    qe.heartbeatTimeout.String(),
+		"last_activity": lastActivity.Format(time.RFC3339),
+		"elapsed":    elapsed.String(),
+	}
+}
+
+// heartbeatLoop runs in a separate goroutine to monitor session activity
+func (qe *QueryEngine) heartbeatLoop(ctx context.Context) {
+	ticker := time.NewTicker(qe.heartbeatInterval)
+	defer ticker.Stop()
+
+	qe.logger.Infof("[Heartbeat] Started (interval: %v, timeout: %v)",
+		qe.heartbeatInterval, qe.heartbeatTimeout)
+
+	for {
+		select {
+		case <-ctx.Done():
+			qe.logger.Info("[Heartbeat] Context cancelled, stopping heartbeat")
+			return
+		case <-qe.heartbeatStopChan:
+			qe.logger.Info("[Heartbeat] Stopped by request")
+			return
+		case <-ticker.C:
+			qe.checkHeartbeat(ctx)
+		}
+	}
+}
+
+// checkHeartbeat checks if the session has been inactive for too long
+func (qe *QueryEngine) checkHeartbeat(ctx context.Context) {
+	qe.heartbeatMu.RLock()
+	enabled := qe.heartbeatEnabled
+	timeout := qe.heartbeatTimeout
+	lastActivity := qe.lastActivityTime
+	qe.heartbeatMu.RUnlock()
+
+	if !enabled {
+		return
+	}
+
+	elapsed := time.Since(lastActivity)
+	if elapsed >= timeout {
+		qe.logger.Warnf("[Heartbeat] Session appears interrupted (inactive for %v), attempting to resume...", elapsed)
+		
+		// Try to recover from transcript
+		if err := qe.tryResumeFromHeartbeat(ctx); err != nil {
+			qe.logger.Errorf("[Heartbeat] Failed to resume session: %v", err)
+		} else {
+			qe.logger.Infof("[Heartbeat] Successfully recovered session, continuing...")
+		}
+	}
+}
+
+// tryResumeFromHeartbeat attempts to resume a session from transcript after detected interruption
+func (qe *QueryEngine) tryResumeFromHeartbeat(ctx context.Context) error {
+	qe.logger.Info("[Heartbeat] Attempting to resume from transcript...")
+
+	// Find the most recent session for this CWD
+	if qe.transcriptProjectMgr == nil {
+		pm, err := transcript.NewProjectManager("")
+		if err != nil {
+			return fmt.Errorf("failed to create transcript manager: %w", err)
+		}
+		qe.transcriptProjectMgr = pm
+	}
+
+	sessions, err := qe.transcriptProjectMgr.ListSessions()
+	if err != nil {
+		return fmt.Errorf("failed to list sessions: %w", err)
+	}
+
+	// Find the most recent session for this cwd
+	recentSession := qe.findMostRecentSessionForCwd(sessions, qe.cwd)
+	if recentSession == "" {
+		return fmt.Errorf("no previous sessions found for current working directory")
+	}
+
+	// Resume the session
+	if err := qe.ResumeFromTranscript(recentSession); err != nil {
+		return fmt.Errorf("failed to resume session %s: %w", recentSession, err)
+	}
+
+	qe.logger.Infof("[Heartbeat] Resumed session: %s", qe.sessionID)
+	return nil
 }
 
 // SetQueryMaxTurns sets the per-query turn budget.
