@@ -294,6 +294,9 @@ func messageContentToString(content any) string {
 
 // SubmitMessage processes a user message and runs the tool call loop
 func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
+	qe.SetProcessing(true)
+	defer qe.SetProcessing(false)
+
 	// Clear previous assistant text for this new turn
 	qe.lastAssistantText = ""
 
@@ -766,6 +769,9 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 // and will run the turn loop until a text-only response is returned,
 // the budget/turn limit is hit, or a hard reset occurs.
 func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
+	qe.SetProcessing(true)
+	defer qe.SetProcessing(false)
+
 	// Clear any previous assistant text for this session
 	qe.lastAssistantText = ""
 

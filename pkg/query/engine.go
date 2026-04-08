@@ -116,6 +116,7 @@ type QueryEngine struct {
 	lastActivityTime   time.Time    // 最后活动时间
 	heartbeatStopChan  chan struct{} // 停止心跳的 channel
 	heartbeatMu       sync.RWMutex // 保护心跳相关状态的锁
+	isProcessing      bool         // 当前是否有正在进行的查询
 
 	// logger is the logrus instance for structured logging
 	logger            *logrus.Logger
@@ -802,6 +803,29 @@ func (qe *QueryEngine) IsHeartbeatEnabled() bool {
 	return qe.heartbeatEnabled
 }
 
+// SetProcessing sets whether the engine is currently processing a query
+func (qe *QueryEngine) SetProcessing(processing bool) {
+	qe.heartbeatMu.Lock()
+	defer qe.heartbeatMu.Unlock()
+	qe.isProcessing = processing
+}
+
+// IsProcessing returns whether the engine is currently processing a query
+func (qe *QueryEngine) IsProcessing() bool {
+	qe.heartbeatMu.RLock()
+	defer qe.heartbeatMu.RUnlock()
+	return qe.isProcessing
+}
+
+// isLastMessageUnresponded checks if the last message in the history is from the user
+func (qe *QueryEngine) isLastMessageUnresponded() bool {
+	if len(qe.messages) == 0 {
+		return false
+	}
+	lastMsg := qe.messages[len(qe.messages)-1]
+	return lastMsg.Role == "user"
+}
+
 // GetHeartbeatStatus returns current heartbeat status information
 func (qe *QueryEngine) GetHeartbeatStatus() map[string]any {
 	qe.heartbeatMu.RLock()
@@ -854,14 +878,37 @@ func (qe *QueryEngine) checkHeartbeat(ctx context.Context) {
 	}
 
 	elapsed := time.Since(lastActivity)
+
+	// Log status in verbose mode
+	if qe.verbose {
+		remaining := timeout - elapsed
+		if remaining < 0 {
+			remaining = 0
+		}
+		qe.logger.Debugf("[Heartbeat] Monitoring session: elapsed=%v, timeout=%v, remaining=%v",
+			elapsed.Truncate(time.Second), timeout, remaining.Truncate(time.Second))
+	}
+
 	if elapsed >= timeout {
 		qe.logger.Warnf("[Heartbeat] Session appears interrupted (inactive for %v), attempting to resume...", elapsed)
-		
+
 		// Try to recover from transcript
 		if err := qe.tryResumeFromHeartbeat(ctx); err != nil {
 			qe.logger.Errorf("[Heartbeat] Failed to resume session: %v", err)
 		} else {
-			qe.logger.Infof("[Heartbeat] Successfully recovered session, continuing...")
+			qe.logger.Infof("[Heartbeat] Successfully recovered session, checking for unresponded messages...")
+			
+			// If the last message is from user and no process is active, retry automatically
+			if qe.isLastMessageUnresponded() && !qe.IsProcessing() {
+				qe.logger.Infof("[Heartbeat] Last message is unresponded, triggering automatic retry...")
+				go func() {
+					if err := qe.RunMainLoop(ctx); err != nil {
+						qe.logger.Errorf("[Heartbeat] Automatic retry failed: %v", err)
+					}
+				}()
+			} else {
+				qe.logger.Infof("[Heartbeat] Successfully recovered session, continuing...")
+			}
 		}
 	}
 }
@@ -1042,7 +1089,7 @@ func (qe *QueryEngine) ResumeFromTranscript(sessionID string) error {
 // autoCompactAfterResume checks if the resumed session exceeds limits
 // and performs automatic compaction if needed.
 func (qe *QueryEngine) autoCompactAfterResume() {
-	if qe.messages == nil || len(qe.messages) == 0 {
+	if len(qe.messages) == 0 {
 		return
 	}
 
