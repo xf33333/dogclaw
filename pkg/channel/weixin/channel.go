@@ -297,10 +297,42 @@ func (c *WeixinChannel) getOrCreateSession(ctx context.Context, chatID string, f
 // in real-time via TextCallback registered in getOrCreateSession, so this
 // function returns "" for successful runs to avoid duplicate messages.
 func (c *WeixinChannel) getReply(ctx context.Context, session *ChatSession, prompt string) string {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	// Increase timeout to 10m to match engine heartbeat timeout
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
+	// Start Typing keep-alive in background to prevent session timeout during long turns
+	typingCtx, typingCancel := context.WithCancel(ctx)
+	go func() {
+		defer typingCancel()
+		// Get typing ticket for keep-alive
+		ticket, err := c.getTypingTicket(typingCtx, session.SenderID)
+		if err != nil || ticket == "" {
+			return
+		}
+
+		// Initial typing indicator
+		_ = c.sendTypingStatus(typingCtx, session.SenderID, ticket, TypingStatusTyping)
+
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-typingCtx.Done():
+				// Send cancel typing status when the turn is over
+				stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				_ = c.sendTypingStatus(stopCtx, session.SenderID, ticket, TypingStatusCancel)
+				stopCancel()
+				return
+			case <-ticker.C:
+				_ = c.sendTypingStatus(typingCtx, session.SenderID, ticket, TypingStatusTyping)
+			}
+		}
+	}()
+
 	err := session.Engine.SubmitMessage(ctx, prompt)
+	typingCancel() // Stop keep-alive as soon as message is submitted
+
 	if err != nil {
 		// TextCallback may not have fired; send the error back explicitly.
 		return fmt.Sprintf("⚠️ 处理错误: %v", err)

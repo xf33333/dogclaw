@@ -248,3 +248,24 @@ func (c *WeixinChannel) getTypingTicket(ctx context.Context, userID string) (str
 	}
 	return cachedTicket, fmt.Errorf("getconfig failed: ret=%d errcode=%d errmsg=%s", resp.Ret, resp.Errcode, resp.Errmsg)
 }
+
+func (c *WeixinChannel) sendTypingStatus(ctx context.Context, chatID, typingTicket string, status int) error {
+	resp, err := c.api.SendTyping(ctx, SendTypingReq{
+		IlinkUserID:  chatID,
+		TypingTicket: typingTicket,
+		Status:       status,
+	})
+	if err != nil {
+		return err
+	}
+	if resp == nil {
+		return fmt.Errorf("sendtyping returned nil response")
+	}
+	if resp.Ret != 0 || resp.Errcode != 0 {
+		if isSessionExpiredStatus(resp.Ret, resp.Errcode) {
+			c.pauseSession("sendtyping", resp.Ret, resp.Errcode, resp.Errmsg)
+		}
+		return fmt.Errorf("sendtyping failed: ret=%d errcode=%d errmsg=%s", resp.Ret, resp.Errcode, resp.Errmsg)
+	}
+	return nil
+}

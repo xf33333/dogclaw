@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -57,8 +58,18 @@ func NewApiClient(baseURL, token string, proxy string) (*ApiClient, error) {
 		BaseURL:    baseURL,
 		Token:      token,
 		HttpClient: client,
-		uin:        randomWechatUIN(),
+		uin:        deterministicWechatUIN(token),
 	}, nil
+}
+
+func deterministicWechatUIN(token string) string {
+	if token == "" {
+		return randomWechatUIN()
+	}
+	sum := sha256.Sum256([]byte(token))
+	// Use first 4 bytes to generate a stable uint32 value
+	uint32Val := binary.BigEndian.Uint32(sum[:4])
+	return base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%d", uint32Val)))
 }
 
 func randomWechatUIN() string {
