@@ -21,6 +21,7 @@ import (
 	"dogclaw/pkg/terminal"
 	"dogclaw/pkg/tools"
 	"dogclaw/pkg/tools/cron"
+	"dogclaw/pkg/tools/skilltool"
 	"dogclaw/pkg/types"
 )
 
@@ -189,6 +190,7 @@ func buildTools(registry *channel.Registry) []types.Tool {
 		tools.NewGlobTool(),
 		tools.NewWebSearchTool(),
 		cron.NewCronTool(),
+		skilltool.NewSkillTool(),
 	}
 
 	if registry != nil {
