@@ -123,6 +123,11 @@ type QueryEngine struct {
 	lastAssistantText string // cached text of most recent assistant reply (for channels)
 }
 
+// SetLogger sets the logger for the query engine
+func (qe *QueryEngine) SetLogger(l *logrus.Logger) {
+	qe.logger = l
+}
+
 // ToolCallInfo describes a single tool call for external consumers (e.g. QQ channel).
 type ToolCallInfo struct {
 	Name    string `json:"name"`

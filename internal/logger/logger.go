@@ -195,7 +195,7 @@ func NewLogger(cfg *Config) *logrus.Logger {
 			// Build log filename
 			var logFile string
 			if cfg.DailyRotate {
-				logFile = filepath.Join(cfg.LogDir, cfg.FilenamePrefix+"_"+time.Now().Format("2006-01-02")+".log")
+				logFile = filepath.Join(cfg.LogDir, cfg.FilenamePrefix+"-"+time.Now().Format("2006-01-02")+".log")
 			} else {
 				logFile = filepath.Join(cfg.LogDir, cfg.FilenamePrefix+".log")
 			}

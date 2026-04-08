@@ -19,6 +19,7 @@ import (
 	"dogclaw/pkg/slash"
 	"dogclaw/pkg/terminal"
 	"dogclaw/pkg/tools"
+	"dogclaw/pkg/tools/cron"
 	"dogclaw/pkg/types"
 )
 
@@ -131,6 +132,10 @@ func runAgent(cfg *config.Config, settings *config.Settings) {
 	// Try to resume the most recent session automatically
 	qe.AutoResumeLatestSession(context.Background())
 
+	// Start cron scheduler
+	cronScheduler := cron.NewScheduler(engineFactory)
+	cronScheduler.Start(context.Background())
+
 	// Interactive loop with readline
 	for {
 		input, err := tm.ReadLine()
@@ -178,6 +183,7 @@ func buildTools() []types.Tool {
 		tools.NewGrepTool(),
 		tools.NewGlobTool(),
 		tools.NewWebSearchTool(),
+		cron.NewCronTool(),
 	}
 }
 
@@ -239,6 +245,10 @@ func runGateway(cfg *config.Config, settings *config.Settings) {
 		runAgent(cfg, settings)
 		return
 	}
+
+	// Start cron scheduler
+	cronScheduler := cron.NewScheduler(newEngineFactory(cfg, settings))
+	cronScheduler.Start(ctx)
 
 	// Start all channels
 	fmt.Printf("🚀 Starting %d channel(s)...\n", len(channels))
