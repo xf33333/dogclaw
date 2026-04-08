@@ -370,6 +370,7 @@ func (c *WeixinChannel) sendMessage(ctx context.Context, toUserID, content strin
 			logger.Errorf("[weixin] GetConfig returned empty token for user %s", toUserID)
 			return "", false
 		}
+		logger.Infof("[weixin] save %s ticket %s", toUserID, resp.TypingTicket)
 		c.contextTokens.Store(toUserID, resp.TypingTicket)
 		c.persistContextTokens()
 		return resp.TypingTicket, true
@@ -444,6 +445,7 @@ func (c *WeixinChannel) isAllowedSender(senderID string) bool {
 	}
 	return false
 }
+
 // Send implements channel.Sender
 func (c *WeixinChannel) Send(ctx context.Context, chatID, message string) error {
 	if message == "" {

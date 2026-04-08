@@ -30,7 +30,7 @@ func (t *NotifyChannelTool) InputSchema() types.ToolInputSchema {
 		Properties: map[string]any{
 			"channel": map[string]any{
 				"type":        "string",
-				"description": "Target channel name: 'qq', 'weixin', or 'cli'",
+				"description": "Target channel name: 'qq', 'weixin','微信', or 'cli'",
 				"enum":        []string{"qq", "weixin", "cli"},
 			},
 			"chat_id": map[string]any{
