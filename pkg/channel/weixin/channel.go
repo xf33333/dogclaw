@@ -35,8 +35,8 @@ type WeixinChannel struct {
 
 // ChatSession wraps a QueryEngine for a single Weixin conversation
 type ChatSession struct {
-	Engine    *query.QueryEngine
-	SenderID  string
+	Engine   *query.QueryEngine
+	SenderID string
 }
 
 // NewWeixinChannel creates a new WeixinChannel from config.
@@ -321,51 +321,85 @@ func (c *WeixinChannel) sendMessage(ctx context.Context, toUserID, content strin
 		return
 	}
 
-	// Ensure we have a context token for this user
-	ct, ok := c.contextTokens.Load(toUserID)
-	if !ok {
+	// getContextToken returns the current context_token for the user,
+	// refreshing via GetConfig if not found.
+	getContextToken := func() (string, bool) {
+		if ct, ok := c.contextTokens.Load(toUserID); ok {
+			return ct.(string), true
+		}
 		logger.Warnf("[weixin] Context token not found for user %s, fetching via GetConfig...", toUserID)
-		resp, err := c.api.GetConfig(ctx, GetConfigReq{
-			IlinkUserID:  toUserID,
-			ContextToken: "", // empty context token to get a new session
-		})
+		resp, err := c.api.GetConfig(ctx, GetConfigReq{IlinkUserID: toUserID})
 		if err != nil || resp.Ret != 0 || resp.Errcode != 0 {
-			logger.Errorf("[weixin] Failed to fetch context token for user %s: %v", toUserID, err)
-			return
+			logger.Errorf("[weixin] GetConfig failed for user %s: err=%v ret=%d code=%d",
+				toUserID, err, resp.Ret, resp.Errcode)
+			return "", false
 		}
-		// GetConfig returns TypingTicket, but for SendMessage we need ContextToken.
-		// Actually the context token should be in the response; let's check the API.
-		// For now, store the typing ticket as context token (they may be interchangeable)
-		// In weixin API, context_token is usually returned in message or GetConfig
-		if resp.TypingTicket != "" {
-			c.contextTokens.Store(toUserID, resp.TypingTicket)
-			c.persistContextTokens()
-			ct = resp.TypingTicket
-		} else {
-			logger.Errorf("[weixin] GetConfig did not return a valid token for user %s", toUserID)
-			return
+		if resp.TypingTicket == "" {
+			logger.Errorf("[weixin] GetConfig returned empty token for user %s", toUserID)
+			return "", false
 		}
+		c.contextTokens.Store(toUserID, resp.TypingTicket)
+		c.persistContextTokens()
+		return resp.TypingTicket, true
 	}
-	contextToken := ct.(string)
 
-	req := SendMessageReq{
-		Msg: WeixinMessage{
-			ToUserID:     toUserID,
-			ClientID:     uuid.New().String(),
-			ContextToken: contextToken,
-			ItemList: []MessageItem{
-				{
-					Type:     MessageItemTypeText,
-					TextItem: &TextItem{Text: content},
+	contextToken, ok := getContextToken()
+	if !ok {
+		return
+	}
+
+	buildReq := func(token string) SendMessageReq {
+		return SendMessageReq{
+			Msg: WeixinMessage{
+				ToUserID:     toUserID,
+				ClientID:     uuid.New().String(),
+				ContextToken: token,
+				ItemList: []MessageItem{
+					{
+						Type:     MessageItemTypeText,
+						TextItem: &TextItem{Text: content},
+					},
 				},
 			},
-		},
+		}
 	}
 
-	_, err := c.api.SendMessage(ctx, req)
+	resp, err := c.api.SendMessage(ctx, buildReq(contextToken))
 	if err != nil {
 		logger.Errorf("[weixin] Failed to send message to %s: %v", toUserID, err)
+		return
 	}
+
+	// Check business-layer error codes (API can return HTTP 200 with non-zero ret/errcode)
+	if resp.Ret != 0 || resp.Errcode != 0 {
+		logger.Errorf("[weixin] SendMessage API error for %s: ret=%d errcode=%d errmsg=%s",
+			toUserID, resp.Ret, resp.Errcode, resp.Errmsg)
+
+		// If session expired, refresh token and retry once
+		if isSessionExpiredStatus(resp.Ret, resp.Errcode) {
+			logger.Warnf("[weixin] Session expired, refreshing context token for %s and retrying...", toUserID)
+			c.contextTokens.Delete(toUserID)
+			newToken, ok := getContextToken()
+			if !ok {
+				logger.Errorf("[weixin] Token refresh failed for %s, message dropped", toUserID)
+				return
+			}
+			resp2, err2 := c.api.SendMessage(ctx, buildReq(newToken))
+			if err2 != nil {
+				logger.Errorf("[weixin] Retry send failed for %s: %v", toUserID, err2)
+				return
+			}
+			if resp2.Ret != 0 || resp2.Errcode != 0 {
+				logger.Errorf("[weixin] Retry SendMessage still failed for %s: ret=%d errcode=%d errmsg=%s",
+					toUserID, resp2.Ret, resp2.Errcode, resp2.Errmsg)
+			} else {
+				logger.Infof("[weixin] Message sent to %s after token refresh (retry)", toUserID)
+			}
+		}
+		return
+	}
+
+	logger.Infof("[weixin] Message sent to %s (%d chars)", toUserID, len(content))
 }
 
 func (c *WeixinChannel) isAllowedSender(senderID string) bool {
