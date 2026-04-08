@@ -80,6 +80,11 @@ type QueryEngine struct {
 	// It receives the tool name and a human-readable summary of the input.
 	ToolCallCallback func(toolName string, summary string)
 
+	// TextCallback is called each time the LLM emits a text block during SubmitMessage,
+	// including turns that also contain tool calls. This allows channels to forward
+	// intermediate LLM commentary in real-time without waiting for the full loop to finish.
+	TextCallback func(text string)
+
 	// LastTurnToolCalls records the last turn's tool use blocks (for channels to consume after SubmitMessage)
 	LastTurnToolCalls []ToolCallInfo
 
@@ -926,7 +931,63 @@ func (qe *QueryEngine) ResumeFromTranscript(sessionID string) error {
 		qe.restoreTranscriptMetadata(tf)
 	}
 
+	// 恢复后立即检查并压缩，防止长会话立即超限
+	qe.autoCompactAfterResume()
+
 	return nil
+}
+
+// autoCompactAfterResume checks if the resumed session exceeds limits
+// and performs automatic compaction if needed.
+func (qe *QueryEngine) autoCompactAfterResume() {
+	if qe.messages == nil || len(qe.messages) == 0 {
+		return
+	}
+
+	// 检查是否需要压缩（使用相同的逻辑作为常规自动压缩）
+	if qe.compactConfig.Enabled {
+		shouldCompact, tokenCount, threshold := compact.CheckAutoCompact(qe.messages, qe.compactConfig, qe.compactTracker)
+		if shouldCompact {
+			if qe.verbose {
+				qe.logger.Debugf("[Resume] Auto-compact triggered: %d tokens >= threshold %d", tokenCount, threshold)
+			}
+			result, err := compact.CompactMessages(context.Background(), qe.client, qe.messages, qe.systemPrompt, qe.compactConfig)
+			if err != nil {
+				qe.logger.Warnf("[Resume] CompactMessages failed: %v", err)
+			} else if result != nil {
+				qe.messages = compact.ApplyCompactResult(qe.messages, result)
+				qe.compactTracker.Compacted = true
+				qe.compactTracker.TurnCounter++
+				if qe.verbose {
+					qe.logger.Debugf("[Resume] Compaction complete: %d -> %d messages, %d -> %d tokens",
+						result.OriginalMessageCount, result.CompactedMessageCount,
+						result.PreCompactTokenCount, result.PostCompactTokenCount)
+				}
+			}
+		} else {
+			// 检查警告状态
+			warning, isBlocking := compact.GetWarningState(tokenCount, qe.compactConfig)
+			if warning != "" && qe.verbose {
+				qe.logger.Warn(warning)
+			}
+			if isBlocking {
+				if qe.verbose {
+					qe.logger.Warn("[Resume] Context blocking limit reached, will need compaction before next turn")
+				}
+			}
+		}
+	}
+
+	// 同时检查是否需要 snip (更激进的消息数裁剪)
+	if qe.snipConfig.Enabled {
+		snipResult := compact.SnipHistory(qe.messages, qe.snipConfig)
+		if snipResult != nil && snipResult.SnippedCount > 0 {
+			if qe.verbose {
+				qe.logger.Debugf("[Resume] Snip: removed %d messages, %d remaining", snipResult.SnippedCount, len(snipResult.Remaining))
+			}
+			qe.messages = snipResult.Remaining
+		}
+	}
 }
 
 // findMostRecentSessionForCwd finds the most recent session ID for a given cwd

@@ -257,7 +257,7 @@ func (c *WeixinChannel) handleInboundMessage(ctx context.Context, msg WeixinMess
 		return
 	}
 
-	session := c.getOrCreateSession(fromUserID, factory)
+	session := c.getOrCreateSession(ctx, fromUserID, factory)
 
 	go func() {
 		reply := c.getReply(ctx, session, content)
@@ -267,12 +267,18 @@ func (c *WeixinChannel) handleInboundMessage(ctx context.Context, msg WeixinMess
 	}()
 }
 
-func (c *WeixinChannel) getOrCreateSession(chatID string, factory channel.EngineFactory) *ChatSession {
+func (c *WeixinChannel) getOrCreateSession(ctx context.Context, chatID string, factory channel.EngineFactory) *ChatSession {
 	if v, ok := c.sessions.Load(chatID); ok {
 		return v.(*ChatSession)
 	}
 
 	engine := factory()
+	// TextCallback: fires for every LLM text block (both intermediate turns with tools
+	// and the final text-only reply). This ensures all LLM commentary reaches the user.
+	engine.TextCallback = func(text string) {
+		c.sendMessage(c.ctx, chatID, text)
+	}
+	// ToolCallCallback: sends a brief notification when a tool is called
 	engine.ToolCallCallback = func(toolName, summary string) {
 		c.sendMessage(c.ctx, chatID, fmt.Sprintf("🔧 %s", summary))
 	}
@@ -286,20 +292,23 @@ func (c *WeixinChannel) getOrCreateSession(chatID string, factory channel.Engine
 	return sess
 }
 
+// getReply runs SubmitMessage and returns a non-empty string only on API errors.
+// Normal LLM text (including slash command output) is delivered to the channel
+// in real-time via TextCallback registered in getOrCreateSession, so this
+// function returns "" for successful runs to avoid duplicate messages.
 func (c *WeixinChannel) getReply(ctx context.Context, session *ChatSession, prompt string) string {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	err := session.Engine.SubmitMessage(ctx, prompt)
 	if err != nil {
+		// TextCallback may not have fired; send the error back explicitly.
 		return fmt.Sprintf("⚠️ 处理错误: %v", err)
 	}
 
-	reply := session.Engine.GetLastAssistantText()
-	if reply == "" {
-		return "（无回复内容）"
-	}
-	return reply
+	// TextCallback already pushed every text block (LLM reply + slash output) to
+	// the channel, so return "" here to avoid sending a duplicate message.
+	return ""
 }
 
 func (c *WeixinChannel) sendMessage(ctx context.Context, toUserID, content string) {

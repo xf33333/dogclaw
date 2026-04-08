@@ -299,7 +299,12 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 
 	// Check if this is a slash command BEFORE triggering any LLM operations (like memory initialization)
 	if slash.IsSlashCommand(prompt) {
-		return qe.handleSlashCommand(ctx, prompt)
+		err := qe.handleSlashCommand(ctx, prompt)
+		// Fire TextCallback so channels (Weixin, QQ, etc.) receive slash command output
+		if qe.TextCallback != nil && qe.lastAssistantText != "" {
+			qe.TextCallback(qe.lastAssistantText)
+		}
+		return err
 	}
 
 	// One-time memory initialization (semantic index + compaction)
@@ -583,25 +588,26 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 				}
 			}
 
-			// Determine user-facing text
-			var userText string
 			if len(textParts) > 0 {
-				userText = strings.Join(textParts, "\n\n")
-			} else if hasToolUse {
-				userText = "(正在执行工具操作…)"
-			}
-			// Update cache for channel retrieval
-			if userText != "" {
+				userText := strings.Join(textParts, "\n\n")
+				// Update cache for channel retrieval
 				qe.lastAssistantText = userText
-			}
-			// Record to transcript
-			if userText != "" {
+				// Record to transcript
 				qe.RecordMessageToTranscript(transcript.MessageTypeAssistant, "assistant", []byte(userText))
+				// If this is an intermediate turn (text + tool calls together), push text
+				// to channels immediately via TextCallback so users see LLM commentary
+				// in real-time rather than waiting for the full loop to finish.
+				if hasToolUse && qe.TextCallback != nil {
+					qe.TextCallback(userText)
+				}
+			} else if hasToolUse {
+				// Tool-only turn: no text to show, leave lastAssistantText as-is
+				// (do not overwrite with a placeholder — the real final text will come later)
 			}
 		}
 
 		if len(toolUseBlocks) == 0 {
-			// No tool calls - capture final assistant text for retrieval (e.g., by channels)
+			// Final turn: no tool calls — capture text and notify channel
 			var finalTextParts []string
 			for _, block := range assistantContent {
 				if block.Type == "text" && block.Text != "" {
@@ -610,12 +616,18 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 			}
 			if len(finalTextParts) > 0 {
 				qe.lastAssistantText = strings.Join(finalTextParts, "\n\n")
+				// TextCallback for the final reply: only fire if it wasn't already
+				// sent during this same turn's text+tool handling above.
+				// Since len(toolUseBlocks)==0 here, this IS the text-only final turn —
+				// fire the callback so channels receive it even inside multi-turn loops.
+				if qe.TextCallback != nil {
+					qe.TextCallback(qe.lastAssistantText)
+				}
 			} else {
-				// Should not happen normally, but set placeholder
-				qe.lastAssistantText = "(正在执行工具操作…)"
+				// LLM returned no text at all (e.g. only thinking blocks)
+				qe.lastAssistantText = "（模型未返回文字内容）"
 			}
 
-			// Done
 			if qe.verbose {
 				qe.logger.Debug("[Response complete]")
 			}

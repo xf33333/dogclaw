@@ -179,8 +179,11 @@ func (c *Channel) handleC2CMessage(newEngine channel.EngineFactory) event.C2CMes
 		session := c.getOrCreateSession(chatID, senderID, newEngine, sendFn)
 
 		go func() {
-			reply := c.getReply(c.ctx, session, content)
-			c.sendMessage(c.ctx, chatID, "direct", reply)
+			// TextCallback delivers LLM text in real-time; getReply only returns a
+			// non-empty string for error messages, so check before sending.
+			if reply := c.getReply(c.ctx, session, content); reply != "" {
+				c.sendMessage(c.ctx, chatID, "direct", reply)
+			}
 		}()
 
 		return nil
@@ -233,8 +236,11 @@ func (c *Channel) handleGroupATMessage(newEngine channel.EngineFactory) event.Gr
 		}
 
 		go func() {
-			reply := c.getReply(c.ctx, session, prompt)
-			c.sendMessage(c.ctx, chatID, "group", reply)
+			// TextCallback delivers LLM text in real-time; getReply only returns a
+			// non-empty string for error messages, so check before sending.
+			if reply := c.getReply(c.ctx, session, prompt); reply != "" {
+				c.sendMessage(c.ctx, chatID, "group", reply)
+			}
 		}()
 
 		return nil
@@ -249,7 +255,12 @@ func (c *Channel) getOrCreateSession(chatID, creator string, newEngine channel.E
 
 	engine := newEngine()
 
-	// Register tool-call callback so QQ receives real-time tool usage notifications
+	// TextCallback: fires for every LLM text block (intermediate turns with tools
+	// and the final text-only reply). Delivers LLM commentary to QQ users in real-time.
+	engine.TextCallback = func(text string) {
+		sendFn(chatID, text)
+	}
+	// ToolCallCallback: sends a brief notification when a tool is called
 	engine.ToolCallCallback = func(toolName, summary string) {
 		sendFn(chatID, fmt.Sprintf("🔧 %s", summary))
 	}
@@ -265,7 +276,10 @@ func (c *Channel) getOrCreateSession(chatID, creator string, newEngine channel.E
 	return sess
 }
 
-// getReply processes a message through the query engine
+// getReply runs SubmitMessage and returns a non-empty string only on API errors.
+// Normal LLM text (including slash command output) is pushed to QQ via TextCallback
+// registered in getOrCreateSession, so this function returns "" for successful runs
+// to avoid sending a duplicate message.
 func (c *Channel) getReply(ctx context.Context, session *ChatSession, prompt string) string {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
@@ -275,12 +289,9 @@ func (c *Channel) getReply(ctx context.Context, session *ChatSession, prompt str
 		return fmt.Sprintf("⚠️ 处理错误: %v", err)
 	}
 
-	reply := session.Engine.GetLastAssistantText()
-	if reply == "" {
-		return "（无回复内容）"
-	}
-
-	return reply
+	// TextCallback already pushed every text block (LLM reply + slash output) to QQ;
+	// return "" here to avoid sending a duplicate message.
+	return ""
 }
 
 // sendMessage sends a reply to a QQ user or group
