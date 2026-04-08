@@ -1,6 +1,7 @@
 package cron
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -49,9 +50,15 @@ func LoadConfig() (*CronConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			// 配置文件不存在，返回空配置
 			return &CronConfig{Tasks: []CronJob{}}, nil
 		}
 		return nil, fmt.Errorf("failed to read cron config: %w", err)
+	}
+
+	// 处理空文件
+	if len(bytes.TrimSpace(data)) == 0 {
+		return &CronConfig{Tasks: []CronJob{}}, nil
 	}
 
 	var config CronConfig
@@ -59,6 +66,7 @@ func LoadConfig() (*CronConfig, error) {
 		return nil, fmt.Errorf("failed to parse cron config: %w", err)
 	}
 
+	// 确保 Tasks 不为 nil
 	if config.Tasks == nil {
 		config.Tasks = []CronJob{}
 	}
@@ -68,6 +76,10 @@ func LoadConfig() (*CronConfig, error) {
 
 // SaveConfig saves the cron configuration to ~/.dogclaw/cron.json
 func SaveConfig(config *CronConfig) error {
+	if config == nil {
+		return fmt.Errorf("config cannot be nil")
+	}
+
 	dir, err := GetSettingsDir()
 	if err != nil {
 		return err
