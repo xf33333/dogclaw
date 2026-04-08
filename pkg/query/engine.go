@@ -643,13 +643,36 @@ func (qe *QueryEngine) handleResumeCommand(ctx context.Context, args string) (st
 }
 
 // AutoResumeLatestSession automatically resumes the most recent session if one exists.
+// It excludes cron-created sessions (session IDs starting with "cronsession-").
 func (qe *QueryEngine) AutoResumeLatestSession(ctx context.Context) error {
 	sessions, err := qe.listSessionsWithSummary(qe.cwd)
 	if err != nil || len(sessions) == 0 {
 		return nil // Normal behavior if no sessions exist
 	}
 
-	sessionID := sessions[0].SessionID
+	// Find the most recent non-cron session
+	var latestNonCronSession *transcript.SessionSummary
+	for i := range sessions {
+		session := sessions[i]
+		// Skip cron-created sessions (their session IDs start with "cronsession-")
+		if strings.HasPrefix(session.SessionID, "cronsession-") {
+			if qe.verbose {
+				qe.logger.Debugf("[Resume] Skipping cron session: %s", session.SessionID)
+			}
+			continue
+		}
+		latestNonCronSession = &session
+		break
+	}
+
+	if latestNonCronSession == nil {
+		if qe.verbose {
+			qe.logger.Debug("[Resume] No non-cron sessions found, skipping auto-resume")
+		}
+		return nil // No non-cron sessions to resume
+	}
+
+	sessionID := latestNonCronSession.SessionID
 	err = qe.ResumeFromTranscript(sessionID)
 	if err != nil {
 		qe.logger.Errorf("Failed to auto-resume latest session: %v", err)
