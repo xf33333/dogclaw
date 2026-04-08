@@ -444,3 +444,27 @@ func (c *WeixinChannel) isAllowedSender(senderID string) bool {
 	}
 	return false
 }
+// Send implements channel.Sender
+func (c *WeixinChannel) Send(ctx context.Context, chatID, message string) error {
+	if message == "" {
+		return nil
+	}
+
+	if chatID == "" {
+		// Broadcast to all known active sessions
+		count := 0
+		c.sessions.Range(func(key, value any) bool {
+			sess := value.(*ChatSession)
+			c.sendMessage(ctx, sess.SenderID, message)
+			count++
+			return true
+		})
+		if count == 0 {
+			logger.Warnf("[weixin] Broadcast requested but no active sessions found")
+		}
+		return nil
+	}
+
+	c.sendMessage(ctx, chatID, message)
+	return nil
+}

@@ -463,3 +463,30 @@ func (c *Channel) truncateMessage(content string) string {
 	}
 	return truncated
 }
+// Send implements channel.Sender
+func (c *Channel) Send(ctx context.Context, chatID, message string) error {
+	if message == "" {
+		return nil
+	}
+
+	if chatID == "" {
+		// Broadcast to all active sessions
+		c.sessions.Range(func(key, value any) bool {
+			cid := key.(string)
+			kind := "direct"
+			if strings.HasPrefix(cid, "group:") {
+				kind = "group"
+			}
+			c.sendMessage(ctx, cid, kind, message)
+			return true
+		})
+		return nil
+	}
+
+	kind := "direct"
+	if strings.HasPrefix(chatID, "group:") {
+		kind = "group"
+	}
+	c.sendMessage(ctx, chatID, kind, message)
+	return nil
+}

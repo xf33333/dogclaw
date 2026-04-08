@@ -12,6 +12,7 @@ import (
 	"dogclaw/internal/api"
 	"dogclaw/internal/config"
 	"dogclaw/pkg/channel"
+	"dogclaw/pkg/channel/cli"
 	"dogclaw/pkg/channel/qq"
 	"dogclaw/pkg/channel/weixin"
 	"dogclaw/pkg/commands"
@@ -126,13 +127,17 @@ func runAgent(cfg *config.Config, settings *config.Settings) {
 	}
 	defer tm.Close()
 
-	engineFactory := newEngineFactory(cfg, settings)
+	// Initialize channel registry for CLI mode (allows notifications to show up in terminal)
+	registry := channel.NewRegistry()
+	registry.Register("cli", cli.NewChannel())
+
+	engineFactory := newEngineFactory(cfg, settings, registry)
 	qe := engineFactory()
 
 	// Try to resume the most recent session automatically
 	qe.AutoResumeLatestSession(context.Background())
 
-	// Start cron scheduler
+	// Update cron scheduler with registry-aware factory
 	cronScheduler := cron.NewScheduler(engineFactory)
 	cronScheduler.Start(context.Background())
 
@@ -174,8 +179,8 @@ func runAgent(cfg *config.Config, settings *config.Settings) {
 }
 
 // buildTools returns the standard tool list
-func buildTools() []types.Tool {
-	return []types.Tool{
+func buildTools(registry *channel.Registry) []types.Tool {
+	toolsList := []types.Tool{
 		tools.NewBashTool(),
 		tools.NewFileReadTool(),
 		tools.NewFileWriteTool(),
@@ -185,13 +190,19 @@ func buildTools() []types.Tool {
 		tools.NewWebSearchTool(),
 		cron.NewCronTool(),
 	}
+
+	if registry != nil {
+		toolsList = append(toolsList, tools.NewNotifyChannelTool(registry))
+	}
+
+	return toolsList
 }
 
 // newEngineFactory creates a factory function for building QueryEngine instances
-func newEngineFactory(cfg *config.Config, settings *config.Settings) func() *query.QueryEngine {
+func newEngineFactory(cfg *config.Config, settings *config.Settings, registry *channel.Registry) func() *query.QueryEngine {
 	return func() *query.QueryEngine {
 		client := api.NewClient(cfg.APIKey, cfg.Model, cfg.BaseURL)
-		toolList := buildTools()
+		toolList := buildTools(registry)
 		systemPrompt := query.BuildSystemPrompt(toolList, "")
 		qe := query.NewQueryEngine(client, toolList, systemPrompt, cfg.MaxTurns)
 		qe.SetVerbose(cfg.Verbose)
@@ -216,6 +227,9 @@ func runGateway(cfg *config.Config, settings *config.Settings) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Initialize channel registry for Gateway mode
+	registry := channel.NewRegistry()
+
 	var channels []channel.Interface
 
 	// QQ channel
@@ -227,6 +241,7 @@ func runGateway(cfg *config.Config, settings *config.Settings) {
 			SendMarkdown: qqCfg.SendMarkdown,
 		})
 		channels = append(channels, ch)
+		registry.Register("qq", ch)
 	}
 
 	// Weixin channel
@@ -236,6 +251,7 @@ func runGateway(cfg *config.Config, settings *config.Settings) {
 			fmt.Printf("❌ Failed to initialize Weixin channel: %v\n", err)
 		} else {
 			channels = append(channels, ch)
+			registry.Register("weixin", ch)
 		}
 	}
 
@@ -247,13 +263,14 @@ func runGateway(cfg *config.Config, settings *config.Settings) {
 	}
 
 	// Start cron scheduler
-	cronScheduler := cron.NewScheduler(newEngineFactory(cfg, settings))
+	engineFactory := newEngineFactory(cfg, settings, registry)
+	cronScheduler := cron.NewScheduler(engineFactory)
 	cronScheduler.Start(ctx)
 
 	// Start all channels
 	fmt.Printf("🚀 Starting %d channel(s)...\n", len(channels))
 	for _, ch := range channels {
-		if err := ch.Start(ctx, newEngineFactory(cfg, settings)); err != nil {
+		if err := ch.Start(ctx, engineFactory); err != nil {
 			fmt.Printf("❌ Failed to start channel: %v\n", err)
 		}
 	}
