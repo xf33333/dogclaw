@@ -35,7 +35,7 @@ func (t *CronTool) InputSchema() types.ToolInputSchema {
 			},
 			"description": map[string]any{
 				"type":        "string",
-				"description": "Natural language description of the task for 'add' or 'update' actions",
+				"description": "Natural language description of the task for 'add' or 'update' actions,具体的定时任务工作内容，不包含给自己定时",
 			},
 			"index": map[string]any{
 				"type":        "integer",
