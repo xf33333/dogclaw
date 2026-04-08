@@ -111,8 +111,7 @@ type QueryEngine struct {
 
 	// logger is the logrus instance for structured logging
 	logger            *logrus.Logger
-	asyncHook         *logger.AsyncHook // 异步日志钩子，用于非阻塞写入
-	lastAssistantText string            // cached text of most recent assistant reply (for channels)
+	lastAssistantText string // cached text of most recent assistant reply (for channels)
 }
 
 // ToolCallInfo describes a single tool call for external consumers (e.g. QQ channel).
@@ -128,7 +127,7 @@ func NewQueryEngine(client *api.Client, tools []types.Tool, systemPrompt string,
 	cwd, _ := os.Getwd()
 
 	// Initialize logger with logrus
-	logger := initLogger(cwd)
+	logger := logger.CreateDailyRotatingLogger(cwd, true)
 
 	// Initialize history manager
 	hm := history.GetHistoryManager()
@@ -196,79 +195,6 @@ func NewQueryEngine(client *api.Client, tools []types.Tool, systemPrompt string,
 	}
 }
 
-// Custom formatter: 级别-日期-代码(行号)-日志内容
-type customFormatter struct{}
-
-func (f *customFormatter) Format(entry *logrus.Entry) ([]byte, error) {
-	// Level: INFO/DEBUG/WARN/ERROR
-	level := strings.ToUpper(entry.Level.String())
-
-	// Timestamp: 2006-01-02 15:04:05
-	timestamp := entry.Time.Format("2006-01-02 15:04:05")
-
-	// Caller info: file:line
-	caller := ""
-	if entry.HasCaller() {
-		// Extract just filename and line
-		file := filepath.Base(entry.Caller.File)
-		caller = fmt.Sprintf("%s:%d", file, entry.Caller.Line)
-	} else {
-		caller = "unknown"
-	}
-
-	// Message
-	msg := entry.Message
-	if entry.Context != nil {
-		msg = fmt.Sprintf("%s %v", entry.Message, entry.Context)
-	}
-
-	// Format: LEVEL-DATE-CALLER-MSG
-	line := fmt.Sprintf("%s-%s-%s %s\n", level, timestamp, caller, msg)
-	return []byte(line), nil
-}
-
-// initLogger creates and configures a logrus logger
-// Logs are written to ./logs/dogclaw_YYYY-MM-DD.log (rotated daily)
-func initLogger(cwd string) *logrus.Logger {
-	logger := logrus.New()
-
-	// Ensure logs directory exists
-	logsDir := filepath.Join(cwd, "logs")
-	if err := os.MkdirAll(logsDir, 0755); err != nil {
-		// Fallback to stderr if can't create dir
-		logger.SetOutput(os.Stderr)
-		logger.Warnf("Failed to create logs dir %s: %v, falling back to stderr", logsDir, err)
-	} else {
-		// Daily log file: dogclaw_2026-04-06.log
-		logFile := filepath.Join(logsDir, fmt.Sprintf("dogclaw_%s.log", time.Now().Format("2006-01-02")))
-		f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err != nil {
-			logger.SetOutput(os.Stderr)
-			logger.Warnf("Failed to open log file %s: %v, falling back to stderr", logFile, err)
-		} else {
-			logger.SetOutput(f)
-		}
-	}
-
-	// Set custom formatter
-	logger.SetFormatter(&customFormatter{})
-
-	// Enable caller info (file:line)
-	logger.SetReportCaller(true)
-
-	// Set level (default Info, can be overridden by env LOG_LEVEL)
-	level := os.Getenv("LOG_LEVEL")
-	if level == "" {
-		level = "info"
-	}
-	lvl, err := logrus.ParseLevel(level)
-	if err != nil {
-		lvl = logrus.InfoLevel
-	}
-	logger.SetLevel(lvl)
-
-	return logger
-}
 
 // SetVerbose enables/disables verbose mode
 func (qe *QueryEngine) SetVerbose(verbose bool) {
