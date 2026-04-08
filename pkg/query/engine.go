@@ -16,6 +16,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"dogclaw/internal/api"
+	"dogclaw/internal/config"
 	"dogclaw/pkg/compact"
 	"dogclaw/pkg/compactmem"
 	"dogclaw/pkg/core"
@@ -1641,9 +1642,10 @@ func BuildSystemPrompt(tools []types.Tool, customPrompt string) string {
 		sb.WriteString("\n\n")
 	}
 
-	sb.WriteString("You are DogClaw, a helpful AI coding assistant implemented in Go. " +
-		"You can help with software engineering tasks including writing code, debugging, " +
-		"file manipulation, and web research.\n\n")
+	// Read base prompt from AGENT.md (Priority: ./AGENT.md > ~/.dogclaw/AGENT.md)
+	basePrompt := config.GetAgentMarkdown()
+	sb.WriteString(basePrompt)
+	sb.WriteString("\n\n")
 
 	sb.WriteString("## Available Tools\n\n")
 	for _, tool := range tools {
@@ -1653,12 +1655,6 @@ func BuildSystemPrompt(tools []types.Tool, customPrompt string) string {
 		sb.WriteString(fmt.Sprintf("- **%s**: %s\n", tool.Name(),
 			tool.Description(nil, types.ToolDescriptionOptions{})))
 	}
-
-	sb.WriteString("\n## Guidelines\n\n")
-	sb.WriteString("- Use tools when needed to accomplish tasks\n")
-	sb.WriteString("- Be concise and accurate\n")
-	sb.WriteString("- Show code and command output when relevant\n")
-	sb.WriteString("- Think step by step before acting\n")
 
 	return sb.String()
 }

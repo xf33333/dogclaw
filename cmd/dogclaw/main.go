@@ -38,6 +38,11 @@ func main() {
 	// Print version / build info
 	PrintVersion()
 
+	// Ensure AGENT.md exists in ~/.dogclaw
+	if err := config.EnsureAgentMarkdownExists(); err != nil {
+		fmt.Printf("⚠️  Warning: Failed to ensure AGENT.md exists: %v\n", err)
+	}
+
 	args := os.Args[1:]
 
 	if len(args) == 0 {
