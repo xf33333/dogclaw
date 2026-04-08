@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"dogclaw/internal/api"
 	"dogclaw/internal/config"
@@ -97,7 +98,7 @@ func main() {
 	switch startupMode {
 	case ModeAgent:
 		fmt.Println("🤖 Starting in AGENT mode (CLI communication)...")
-		runAgent(cfg)
+		runAgent(cfg, settings)
 	case ModeGateway:
 		fmt.Println("🌐 Starting in GATEWAY mode (channel communication)...")
 		runGateway(cfg, settings)
@@ -111,7 +112,7 @@ func main() {
 }
 
 // runAgent starts the agent in CLI interactive mode
-func runAgent(cfg *config.Config) {
+func runAgent(cfg *config.Config, settings *config.Settings) {
 	fmt.Println("🦞 DogClaw - AI Coding Assistant (Go Implementation)")
 	fmt.Println("Type your message or /help for commands. Ctrl+C to exit.")
 	fmt.Println()
@@ -124,7 +125,7 @@ func runAgent(cfg *config.Config) {
 	}
 	defer tm.Close()
 
-	engineFactory := newEngineFactory(cfg)
+	engineFactory := newEngineFactory(cfg, settings)
 	qe := engineFactory()
 
 	// Try to resume the most recent session automatically
@@ -181,7 +182,7 @@ func buildTools() []types.Tool {
 }
 
 // newEngineFactory creates a factory function for building QueryEngine instances
-func newEngineFactory(cfg *config.Config) func() *query.QueryEngine {
+func newEngineFactory(cfg *config.Config, settings *config.Settings) func() *query.QueryEngine {
 	return func() *query.QueryEngine {
 		client := api.NewClient(cfg.APIKey, cfg.Model, cfg.BaseURL)
 		toolList := buildTools()
@@ -196,6 +197,10 @@ func newEngineFactory(cfg *config.Config) func() *query.QueryEngine {
 		if cfg.MaxTokens > 0 {
 			qe.SetMaxTokens(cfg.MaxTokens)
 		}
+		// Apply heartbeat configuration from settings
+		qe.SetHeartbeatEnabled(settings.EnableHeartbeat)
+		qe.SetHeartbeatInterval(time.Duration(settings.HeartbeatPeriod) * time.Minute)
+		qe.SetHeartbeatTimeout(time.Duration(settings.HeartbeatTimeout) * time.Minute)
 		return qe
 	}
 }
@@ -231,14 +236,14 @@ func runGateway(cfg *config.Config, settings *config.Settings) {
 	if len(channels) == 0 {
 		fmt.Println("⚠️  No channels configured for gateway mode. Configure at least one channel (e.g., QQ) in environment.")
 		fmt.Println("Falling back to agent mode...")
-		runAgent(cfg)
+		runAgent(cfg, settings)
 		return
 	}
 
 	// Start all channels
 	fmt.Printf("🚀 Starting %d channel(s)...\n", len(channels))
 	for _, ch := range channels {
-		if err := ch.Start(ctx, newEngineFactory(cfg)); err != nil {
+		if err := ch.Start(ctx, newEngineFactory(cfg, settings)); err != nil {
 			fmt.Printf("❌ Failed to start channel: %v\n", err)
 		}
 	}
