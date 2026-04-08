@@ -775,11 +775,17 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 	// Clear any previous assistant text for this session
 	qe.lastAssistantText = ""
 
-	// Start heartbeat monitoring if enabled
-	if qe.IsHeartbeatEnabled() {
-		qe.StartHeartbeat(ctx)
-		defer qe.StopHeartbeat()
+	// Ensure API client can notify us of activity (heartbeat)
+	if qe.client != nil {
+		qe.client.OnActivity = qe.UpdateHeartbeat
 	}
+
+	// Start heartbeat monitoring. 
+	// We enable it by default during RunMainLoop unless the user explicitly 
+	// wants it off, but based on feedback it should be active.
+	qe.SetHeartbeatEnabled(true)
+	qe.StartHeartbeat(ctx)
+	defer qe.StopHeartbeat()
 
 	// One-time memory initialization (semantic index + compaction)
 	qe.initMemoryIndex(ctx)
@@ -1077,6 +1083,9 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 			}
 
 			result, err := tool.Call(ctx, inputMap, toolCtx, nil)
+			// Update heartbeat immediately after tool returns
+			qe.UpdateHeartbeat()
+
 			if err != nil {
 				qe.addToolResult(toolUseID, fmt.Sprintf("Error: %v", err), true)
 				toolResults = append(toolResults, fmt.Sprintf("- **%s**: ❌ Error: %v", toolName, err))

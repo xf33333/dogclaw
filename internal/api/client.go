@@ -64,6 +64,7 @@ func (c *Client) doWithFunnelRetry(ctx context.Context, fn func(context.Context)
 		}
 
 		logger.Info("[FunnelRetry] Attempt %d: (Funnel left: %v), retrying (waiting 1s)...", attempt, remaining.Round(time.Second))
+		c.notifyActivity()
 
 		resp, err := fn(ctx)
 		if err == nil {
@@ -118,6 +119,9 @@ const (
 	ProviderOllama     ProviderType = "ollama"
 )
 
+// ActivityFunc is a callback to notify high-level components of progress
+type ActivityFunc func()
+
 // Client is the API client (supports Anthropic and OpenRouter/OpenAI compatible APIs)
 type Client struct {
 	HTTPClient  *http.Client
@@ -126,6 +130,16 @@ type Client struct {
 	Model       string
 	Provider    ProviderType
 	rateLimiter *LeakyBucket
+
+	// OnActivity is called during long-running operations (like 429 retries)
+	// to notify the engine that progress is still being made.
+	OnActivity ActivityFunc
+}
+
+func (c *Client) notifyActivity() {
+	if c.OnActivity != nil {
+		c.OnActivity()
+	}
 }
 
 // LeakyBucket implements a token-bucket rate limiter
@@ -518,6 +532,7 @@ func (c *Client) sendAnthropicRequest(ctx context.Context, req *MessageRequest) 
 
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		c.notifyActivity()
 		// Wait for rate limiter before each attempt
 		if err := c.rateLimiter.Wait(ctx); err != nil {
 			return nil, fmt.Errorf("rate limiter wait failed: %w", err)
@@ -682,6 +697,7 @@ func (c *Client) sendOpenAICompatibleRequest(ctx context.Context, req *MessageRe
 		logger.Debug("[OpenRouter] Sending request to %s (attempt %d/%d)...", endpoint, attempt+1, maxRetries+1)
 
 		// Wait for rate limiter before each attempt
+		c.notifyActivity()
 		if err := c.rateLimiter.Wait(ctx); err != nil {
 			return nil, fmt.Errorf("rate limiter wait failed: %w", err)
 		}

@@ -206,8 +206,8 @@ func NewQueryEngine(client *api.Client, tools []types.Tool, systemPrompt string,
 
 		// Heartbeat mechanism (disabled by default)
 		heartbeatEnabled:  false,
-		heartbeatInterval: time.Minute,
-		heartbeatTimeout:  time.Minute * 2,
+		heartbeatInterval: time.Second * 30, // More frequent checks
+		heartbeatTimeout:  time.Minute * 10, // Longer timeout for rate limits
 		lastActivityTime:   time.Now(),
 		heartbeatStopChan:  make(chan struct{}, 1),
 		heartbeatMu:       sync.RWMutex{},
@@ -897,17 +897,27 @@ func (qe *QueryEngine) checkHeartbeat(ctx context.Context) {
 	if elapsed >= timeout {
 		qe.logger.Warnf("[Heartbeat] Session appears interrupted (inactive for %v), attempting to resume...", elapsed)
 
+		// Check if we are stuck in processing. If so, we might need a hard restart.
+		isStuck := qe.IsProcessing()
+		if isStuck {
+			qe.logger.Warnf("[Heartbeat] Session is still in 'isProcessing' state, but has been inactive for too long. Forcing recovery.")
+			qe.SetProcessing(false) // Force-clear processing flag to allow retry
+		}
+
 		// Try to recover from transcript
 		if err := qe.tryResumeFromHeartbeat(ctx); err != nil {
 			qe.logger.Errorf("[Heartbeat] Failed to resume session: %v", err)
 		} else {
 			qe.logger.Infof("[Heartbeat] Successfully recovered session, checking for unresponded messages...")
 			
-			// If the last message is from user and no process is active, retry automatically
-			if qe.isLastMessageUnresponded() && !qe.IsProcessing() {
+			// If the last message is from user, retry automatically.
+			// Note: We don't check IsProcessing here because we might have forced it to false above.
+			if qe.isLastMessageUnresponded() {
 				qe.logger.Infof("[Heartbeat] Last message is unresponded, triggering automatic retry...")
 				go func() {
-					if err := qe.RunMainLoop(ctx); err != nil {
+					// Use a background context for automatic retry to survive original query timeout
+					bgCtx := context.Background()
+					if err := qe.RunMainLoop(bgCtx); err != nil {
 						qe.logger.Errorf("[Heartbeat] Automatic retry failed: %v", err)
 					}
 				}()
