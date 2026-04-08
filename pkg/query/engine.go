@@ -113,10 +113,10 @@ type QueryEngine struct {
 	heartbeatEnabled  bool          // 是否启用心跳
 	heartbeatInterval time.Duration // 心跳检查间隔
 	heartbeatTimeout  time.Duration // 超时时间（超过此时间无响应则判断为中断）
-	lastActivityTime   time.Time    // 最后活动时间
-	heartbeatStopChan  chan struct{} // 停止心跳的 channel
-	heartbeatMu       sync.RWMutex // 保护心跳相关状态的锁
-	isProcessing      bool         // 当前是否有正在进行的查询
+	lastActivityTime  time.Time     // 最后活动时间
+	heartbeatStopChan chan struct{} // 停止心跳的 channel
+	heartbeatMu       sync.RWMutex  // 保护心跳相关状态的锁
+	isProcessing      bool          // 当前是否有正在进行的查询
 
 	// logger is the logrus instance for structured logging
 	logger            *logrus.Logger
@@ -208,15 +208,14 @@ func NewQueryEngine(client *api.Client, tools []types.Tool, systemPrompt string,
 		heartbeatEnabled:  false,
 		heartbeatInterval: time.Second * 30, // More frequent checks
 		heartbeatTimeout:  time.Minute * 10, // Longer timeout for rate limits
-		lastActivityTime:   time.Now(),
-		heartbeatStopChan:  make(chan struct{}, 1),
+		lastActivityTime:  time.Now(),
+		heartbeatStopChan: make(chan struct{}, 1),
 		heartbeatMu:       sync.RWMutex{},
 
 		// Logger
 		logger: logger,
 	}
 }
-
 
 // SetVerbose enables/disables verbose mode
 func (qe *QueryEngine) SetVerbose(verbose bool) {
@@ -583,11 +582,11 @@ func (qe *QueryEngine) listSessionsWithSummary(cwd string) ([]transcript.Session
 // handleResumeCommand handles the /resume command to restore a previous session
 func (qe *QueryEngine) handleResumeCommand(ctx context.Context, args string) (string, error) {
 	sessionID := strings.TrimSpace(args)
-	
+
 	// Fetch sessions to support index-based selection and listing
 	var sessions []transcript.SessionSummary
 	var err error
-	
+
 	// Make sure session manager exists
 	if qe.sessionManager == nil {
 		sm, errInit := transcript.NewSessionManager("")
@@ -595,7 +594,7 @@ func (qe *QueryEngine) handleResumeCommand(ctx context.Context, args string) (st
 			qe.sessionManager = sm
 		}
 	}
-	
+
 	sessions, err = qe.listSessionsWithSummary(qe.cwd)
 	if err != nil {
 		return "", fmt.Errorf("failed to list sessions: %w", err)
@@ -638,7 +637,7 @@ func (qe *QueryEngine) handleResumeCommand(ctx context.Context, args string) (st
 	if err != nil {
 		return "", fmt.Errorf("failed to resume session %s: %w", sessionID, err)
 	}
-	
+
 	msg := fmt.Sprintf("✅ Resumed session: %s\n   Messages: %d, Turns: %d", qe.sessionID, len(qe.messages), qe.currentTurn)
 	return msg, nil
 }
@@ -649,14 +648,14 @@ func (qe *QueryEngine) AutoResumeLatestSession(ctx context.Context) error {
 	if err != nil || len(sessions) == 0 {
 		return nil // Normal behavior if no sessions exist
 	}
-	
+
 	sessionID := sessions[0].SessionID
 	err = qe.ResumeFromTranscript(sessionID)
 	if err != nil {
 		qe.logger.Errorf("Failed to auto-resume latest session: %v", err)
 		return err
 	}
-	
+
 	msg := fmt.Sprintf("♻️  Auto-resumed latest session: %s\n   Messages: %d, Turns: %d", qe.sessionID, len(qe.messages), qe.currentTurn)
 	qe.lastAssistantText = msg
 	qe.logger.Info(msg)
@@ -668,15 +667,15 @@ func (qe *QueryEngine) StartNewSession(ctx context.Context) string {
 	qe.messages = make([]api.MessageParam, 0)
 	qe.currentTurn = 0
 	qe.usageTracker = &usage.AccumulatedUsage{}
-	
+
 	// Close current transcript file
 	qe.transcriptFile = nil
-	
+
 	// Generate new session ID
 	qe.sessionID = fmt.Sprintf("session-%d", time.Now().UnixMilli())
 	qe.historyMgr.Init(qe.cwd, qe.sessionID)
 	qe.initTranscript()
-	
+
 	msg := fmt.Sprintf("✅ Started new session: %s", qe.sessionID)
 	qe.logger.Info(msg)
 	return msg
@@ -750,6 +749,7 @@ func (qe *QueryEngine) SetHeartbeatEnabled(enabled bool) {
 	qe.heartbeatMu.Lock()
 	defer qe.heartbeatMu.Unlock()
 	qe.heartbeatEnabled = enabled
+	logger.GetGlobalLogger().Infof("[heartbeat] enabled: %v", qe.heartbeatEnabled)
 }
 
 // SetHeartbeatInterval sets the heartbeat check interval
@@ -840,11 +840,11 @@ func (qe *QueryEngine) GetHeartbeatStatus() map[string]any {
 	elapsed := time.Since(lastActivity)
 
 	return map[string]any{
-		"enabled":    qe.heartbeatEnabled,
-		"interval":   qe.heartbeatInterval.String(),
-		"timeout":    qe.heartbeatTimeout.String(),
+		"enabled":       qe.heartbeatEnabled,
+		"interval":      qe.heartbeatInterval.String(),
+		"timeout":       qe.heartbeatTimeout.String(),
 		"last_activity": lastActivity.Format(time.RFC3339),
-		"elapsed":    elapsed.String(),
+		"elapsed":       elapsed.String(),
 	}
 }
 
@@ -909,7 +909,7 @@ func (qe *QueryEngine) checkHeartbeat(ctx context.Context) {
 			qe.logger.Errorf("[Heartbeat] Failed to resume session: %v", err)
 		} else {
 			qe.logger.Infof("[Heartbeat] Successfully recovered session, checking for unresponded messages...")
-			
+
 			// If the last message is from user, retry automatically.
 			// Note: We don't check IsProcessing here because we might have forced it to false above.
 			if qe.isLastMessageUnresponded() {
