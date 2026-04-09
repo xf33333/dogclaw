@@ -118,13 +118,18 @@ func ParseSkill(content string, filePath string, name string, source SkillSource
 }
 
 // DiscoverSkills looks for skills in standard locations:
-// 1. Managed skills (TBD)
+// 1. Current directory skills directory (./skills) - HIGHEST PRIORITY
 // 2. User skills ( ~/.dogclaw/skills)
 // 3. Project skills (.dogclaw/skills in project root and parent dirs)
 func DiscoverSkills(cwd string) ([]*Skill, error) {
 	var allSkills []*Skill
 
-	// 1. User skills
+	// 1. Current directory skills directory (./skills) - HIGHEST PRIORITY
+	currSkillsDir := filepath.Join(cwd, "skills")
+	skills, _ := LoadSkillsFromDir(currSkillsDir, SourceProject)
+	allSkills = append(allSkills, skills...)
+
+	// 2. User skills
 	home, err := os.UserHomeDir()
 	if err == nil {
 		userSkillsDir := filepath.Join(home, ".dogclaw", "skills")
@@ -137,7 +142,7 @@ func DiscoverSkills(cwd string) ([]*Skill, error) {
 
 	}
 
-	// 2. Project skills (walking up from cwd)
+	// 3. Project skills (walking up from cwd)
 	curr := cwd
 	for {
 		projectSkillsDir := filepath.Join(curr, ".dogclaw", "skills")
