@@ -35,7 +35,7 @@ const (
 	ModeOnboard StartupMode = "onboard"
 )
 
-func setupSignalHandler() {
+func setupSignalHandler(stopChan chan<- os.Signal) {
 	// 监听信号
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGUSR2, syscall.SIGINT)
@@ -51,14 +51,17 @@ func setupSignalHandler() {
 		if sig == syscall.SIGUSR2 {
 			os.Exit(12)
 		}
-		// 其他信号正常退出
-		os.Exit(0)
+		// 其他信号传递给 stopChan
+		if stopChan != nil {
+			stopChan <- sig
+		} else {
+			os.Exit(0)
+		}
 	}()
 }
 func main() {
 	// Print version / build info
 	PrintVersion()
-	setupSignalHandler()
 	// Ensure AGENT.md exists in ~/.dogclaw
 	if err := config.EnsureAgentMarkdownExists(); err != nil {
 		fmt.Printf("⚠️  Warning: Failed to ensure AGENT.md exists: %v\n", err)
@@ -126,12 +129,16 @@ func main() {
 	// Start based on mode
 	switch startupMode {
 	case ModeAgent:
+		setupSignalHandler(nil)
 		fmt.Println("🤖 Starting in AGENT mode (CLI communication)...")
 		runAgent(cfg, settings)
 	case ModeGateway:
+		stopChan := make(chan os.Signal, 1)
+		setupSignalHandler(stopChan)
 		fmt.Println("🌐 Starting in GATEWAY mode (channel communication)...")
-		runGateway(cfg, settings)
+		runGateway(cfg, settings, stopChan)
 	case ModeOnboard:
+		setupSignalHandler(nil)
 		fmt.Println("🚀 Starting in ONBOARD mode (setup)...")
 		if err := commands.RunOnboard(context.Background(), settings); err != nil {
 			fmt.Printf("❌ Onboarding failed: %v\n", err)
@@ -253,7 +260,7 @@ func newEngineFactory(cfg *config.Config, settings *config.Settings, registry *c
 }
 
 // runGateway starts all configured channels (gateway mode)
-func runGateway(cfg *config.Config, settings *config.Settings) {
+func runGateway(cfg *config.Config, settings *config.Settings, stopChan <-chan os.Signal) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -306,9 +313,7 @@ func runGateway(cfg *config.Config, settings *config.Settings) {
 	}
 
 	// Handle shutdown signals
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	sig := <-sigCh
+	sig := <-stopChan
 	fmt.Printf("\n📥 Received %v, shutting down...\n", sig)
 	cancel()
 	for _, ch := range channels {
