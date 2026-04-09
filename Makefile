@@ -48,11 +48,23 @@ build-darwin:
 	@echo "🔨 Building for darwin/amd64..."
 	GOOS=darwin GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 $(CMD_PATH)
 
+build-darwin-arm64:
+	@echo "🔨 Building for darwin/arm64 (Apple Silicon)..."
+	GOOS=darwin GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 $(CMD_PATH)
+
 build-linux:
 	@echo "🔨 Building for linux/amd64..."
 	GOOS=linux GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 $(CMD_PATH)
 
-build-all: build-darwin build-linux
+build-linux-arm64:
+	@echo "🔨 Building for linux/arm64..."
+	GOOS=linux GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 $(CMD_PATH)
+
+build-linux-armv7:
+	@echo "🔨 Building for linux/arm/v7 (32-bit ARM)..."
+	GOOS=linux GOARCH=arm GOARM=7 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-linux-armv7 $(CMD_PATH)
+
+build-all: build-darwin build-darwin-arm64 build-linux build-linux-arm64 build-linux-armv7
 
 # Run agent mode
 run-agent: build
@@ -124,20 +136,23 @@ help:
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Targets:"
-	@echo "  build         - Build the binary (default)"
-	@echo "  build-darwin  - Build for macOS/amd64"
-	@echo "  build-linux   - Build for Linux/amd64"
-	@echo "  build-all     - Build for all platforms"
-	@echo "  run-agent     - Build and run in agent mode"
-	@echo "  run-gateway   - Build and run in gateway mode"
-	@echo "  run           - Build and run with ARGS (make run ARGS=agent)"
-	@echo "  install       - Install binary to GOPATH/bin"
-	@echo "  clean         - Remove build artifacts"
-	@echo "  test          - Run tests"
-	@echo "  test-coverage - Run tests with coverage report"
-	@echo "  fmt           - Format code"
-	@echo "  tidy          - Tidy dependencies"
-	@echo "  vendor        - Vendor dependencies"
-	@echo "  vet/lint      - Run go vet"
-	@echo "  check         - Run fmt, vet, test, and tidy"
-	@echo "  help          - Show this help"
+	@echo "  build             - Build the binary (default)"
+	@echo "  build-darwin      - Build for macOS/amd64"
+	@echo "  build-darwin-arm64- Build for macOS/arm64 (Apple Silicon)"
+	@echo "  build-linux       - Build for Linux/amd64"
+	@echo "  build-linux-arm64 - Build for Linux/arm64"
+	@echo "  build-linux-armv7 - Build for Linux/arm/v7 (32-bit ARM)"
+	@echo "  build-all         - Build for all platforms"
+	@echo "  run-agent         - Build and run in agent mode"
+	@echo "  run-gateway       - Build and run in gateway mode"
+	@echo "  run               - Build and run with ARGS (make run ARGS=agent)"
+	@echo "  install           - Install binary to GOPATH/bin"
+	@echo "  clean             - Remove build artifacts"
+	@echo "  test              - Run tests"
+	@echo "  test-coverage     - Run tests with coverage report"
+	@echo "  fmt               - Format code"
+	@echo "  tidy              - Tidy dependencies"
+	@echo "  vendor            - Vendor dependencies"
+	@echo "  vet/lint          - Run go vet"
+	@echo "  check             - Run fmt, vet, test, and tidy"
+	@echo "  help              - Show this help"
