@@ -58,6 +58,9 @@ const (
 
 	// Workflow
 	WORKFLOW_TOOL_NAME = "Workflow"
+
+	// Restart Gateway
+	RESTART_GATEWAY_TOOL_NAME = "RestartGateway"
 )
 
 // Shell tool names (Bash + PowerShell)

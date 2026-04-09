@@ -222,6 +222,7 @@ func buildTools(registry *channel.Registry) []types.Tool {
 		tools.NewGrepTool(),
 		tools.NewGlobTool(),
 		tools.NewWebSearchTool(),
+		tools.NewRestartGatewayTool(),
 		cron.NewCronTool(),
 		skilltool.NewSkillTool(),
 	}
