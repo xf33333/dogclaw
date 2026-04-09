@@ -8,7 +8,7 @@ PID_FILE="$SCRIPT_DIR/.dogclaw.pid"
 ARGS_FILE="$SCRIPT_DIR/.dogclaw.args"
 ENV_FILE="$SCRIPT_DIR/.dogclaw.env"
 BINARY_NAME="dogclaw"
-BINARY_PATH="$SCRIPT_DIR/$BINARY_NAME"
+BINARY_PATH="$SCRIPT_DIR/bin/$BINARY_NAME"
 
 # 颜色输出
 RED='\033[0;31m'
@@ -107,8 +107,8 @@ rebuild() {
     log_info "开始重新编译..."
     cd "$SCRIPT_DIR" || exit 1
     
-    if make build; then
-        log_success "编译成功"
+    if go build -o bin/dogclaw ./cmd/dogclaw/; then
+        log_success "编译成功: bin/dogclaw"
         return 0
     else
         log_error "编译失败"
@@ -154,6 +154,7 @@ show_help() {
     echo "用法: $0 [命令 [参数]]"
     echo ""
     echo "命令:"
+    echo "  build          - 仅编译不重启"
     echo "  start <mode>  - 启动并保存状态 (例如: $0 start agent)"
     echo "  restart        - 重新编译并重启 (使用保存的参数)"
     echo "  stop           - 停止运行中的进程"
@@ -161,6 +162,9 @@ show_help() {
     echo "  help           - 显示帮助"
     echo ""
     echo "示例:"
+    echo "  # 仅编译"
+    echo "    $0 build"
+    echo ""
     echo "  # 首次启动"
     echo "    $0 start agent"
     echo ""
@@ -195,6 +199,9 @@ main() {
     shift
     
     case "$cmd" in
+        build)
+            rebuild
+            ;;
         start)
             if [[ $# -eq 0 ]]; then
                 log_error "请指定模式 (agent/gateway/onboard)"
