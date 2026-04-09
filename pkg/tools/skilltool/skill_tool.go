@@ -57,10 +57,9 @@ func (t *SkillTool) InputSchema() types.ToolInputSchema {
 }
 
 func (t *SkillTool) Description(input map[string]any, opts types.ToolDescriptionOptions) string {
-	return "Discover, execute, and install custom prompt-based skills. " +
+	return "Discover custom prompt-based skills. " +
 		"Use 'list' to see all skills, 'search' to find relevant skills, " +
-		"'run' to execute a specific skill with arguments, " +
-		"if install skill,you should manually create the directory in ~/.dogclaw/skills/<skill-name>/ and write all necessary files (SKILL.md, scripts, etc.) using file tools."
+		"if user want to install skill,you should manually create the directory in ~/.dogclaw/skills/<skill-name>/ and write all necessary files (SKILL.md, scripts, etc.) using file tools."
 }
 
 func (t *SkillTool) Call(ctx context.Context, input map[string]any, toolCtx types.ToolUseContext, onProgress types.ToolCallProgress) (*types.ToolResult, error) {
@@ -230,7 +229,7 @@ func (t *SkillTool) IsDestructive(input map[string]any) bool {
 }
 
 func (t *SkillTool) IsEnabled() bool {
-	return true
+	return false
 }
 
 func (t *SkillTool) SearchHint() string {

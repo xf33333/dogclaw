@@ -158,5 +158,5 @@ func formatSearchResults(query string, results []SearchResult) string {
 func (t *WebSearchTool) IsConcurrencySafe(input map[string]any) bool { return true }
 func (t *WebSearchTool) IsReadOnly(input map[string]any) bool        { return true }
 func (t *WebSearchTool) IsDestructive(input map[string]any) bool     { return false }
-func (t *WebSearchTool) IsEnabled() bool                             { return true }
+func (t *WebSearchTool) IsEnabled() bool                             { return false }
 func (t *WebSearchTool) SearchHint() string                          { return "search web internet query find information" }

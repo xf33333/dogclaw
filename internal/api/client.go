@@ -530,7 +530,9 @@ func (c *Client) SendMessage(ctx context.Context, req *MessageRequest) (*Message
 
 // sendAnthropicRequest sends a request to Anthropic API with retry logic
 func (c *Client) sendAnthropicRequest(ctx context.Context, req *MessageRequest) (*MessageResponse, error) {
+
 	body, err := json.Marshal(req)
+	logger.GetGlobalLogger().Info("[SendAnthropicRequest] Sending Anthropic request %v", string(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -645,6 +647,7 @@ func (c *Client) doAnthropicRequest(ctx context.Context, body []byte) (*MessageR
 	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
 	httpReq.Header.Set("anthropic-version", anthropicAPIVersion)
 
+	logger.GetGlobalLogger().Info("[Anthropic] Sending request to %s  ", c.BaseURL+"/v1/messages")
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
 		return nil, c.wrapNetworkError(ctx, err)

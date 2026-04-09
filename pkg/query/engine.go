@@ -1659,7 +1659,6 @@ func BuildSystemPrompt(tools []types.Tool, loadedSkills []*skills.Skill, customP
 
 	if len(loadedSkills) > 0 {
 		sb.WriteString("\n## Available Skills\n\n")
-		sb.WriteString("Skills are custom prompt-based capabilities stored in ~/.dogclaw/skills/. Use the 'Skill' tool to run them.\n")
 		//sb.WriteString("To install a new skill:\n")
 		//sb.WriteString("- For simple skills (single SKILL.md), use 'Skill' tool with action 'install'.\n")
 		//sb.WriteString("- For complex skills (multiple files), manually create ~/.dogclaw/skills/<skill-name>/ and write SKILL.md plus any other assets using file tools.\n\n")
