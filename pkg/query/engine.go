@@ -1649,6 +1649,7 @@ func BuildSystemPrompt(tools []types.Tool, loadedSkills []*skills.Skill, customP
 	sb.WriteString("\n\n")
 
 	sb.WriteString("## Available Tools\n\n")
+	sb.WriteString("不要使用不在列表里的tool:\n")
 	for _, tool := range tools {
 		if !tool.IsEnabled() {
 			continue
@@ -1658,8 +1659,8 @@ func BuildSystemPrompt(tools []types.Tool, loadedSkills []*skills.Skill, customP
 	}
 
 	if len(loadedSkills) > 0 {
-		sb.WriteString("\n## Available Skills\n\n")
-		//sb.WriteString("To install a new skill:\n")
+		sb.WriteString("\n## Skills (mandatory)\n\n")
+		sb.WriteString("如果需要可以使用以下技能:\n")
 		//sb.WriteString("- For simple skills (single SKILL.md), use 'Skill' tool with action 'install'.\n")
 		//sb.WriteString("- For complex skills (multiple files), manually create ~/.dogclaw/skills/<skill-name>/ and write SKILL.md plus any other assets using file tools.\n\n")
 		for _, s := range loadedSkills {

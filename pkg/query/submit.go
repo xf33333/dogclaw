@@ -146,8 +146,16 @@ func (qe *QueryEngine) extractToolCallsFromContent(assistantContent *[]api.Conte
 	var toolUseBlocks []api.ContentBlock
 	for i := 0; i < len(*assistantContent); i++ {
 		block := (*assistantContent)[i]
-		if block.Type == "text" {
-			extracted := parseToolUseFromText(block.Text)
+		if block.Type == "text" || block.Type == "thinking" {
+			content := block.Text
+			if block.Type == "thinking" {
+				content = block.Thinking
+			}
+			if content == "" {
+				continue
+			}
+
+			extracted := parseToolUseFromText(content)
 			if len(extracted) > 0 {
 				// Convert to tool_use blocks
 				for _, bc := range extracted {
@@ -158,13 +166,18 @@ func (qe *QueryEngine) extractToolCallsFromContent(assistantContent *[]api.Conte
 						Input: bc.Input,
 					})
 				}
-				// Clean the text block
-				cleaned := extractTextBeforeToolUse(block.Text)
-				if cleaned != "" {
-					(*assistantContent)[i].Text = cleaned
+				// Clean the block content
+				cleaned := extractTextBeforeToolUse(content)
+				if block.Type == "text" {
+					if cleaned != "" {
+						(*assistantContent)[i].Text = cleaned
+					} else {
+						// Replace empty text with a placeholder so user sees something
+						(*assistantContent)[i].Text = "(正在执行工具操作…)"
+					}
 				} else {
-					// Replace empty text with a placeholder so user sees something
-					(*assistantContent)[i].Text = "(正在执行工具操作…)"
+					// Clean thinking block
+					(*assistantContent)[i].Thinking = cleaned
 				}
 			}
 		}
@@ -541,10 +554,19 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 					Text: block.Text,
 				})
 			}
-			if block.Type == "thinking" && block.Text != "" {
+			// Map reasoning/thinking to thinking block (handles both Anthropic and OpenAI/compatible reasoning fields)
+			content := block.Thinking
+			if content == "" && block.Type == "thinking" {
+				content = block.Text
+			}
+			if content != "" {
 				if qe.showThinkingInLog {
-					qe.logger.Infof("[🧠 Thinking (%d chars)]\n%s\n[End Thinking]", len(block.Text), block.Text)
+					qe.logger.Infof("[🧠 Thinking (%d chars)]\n%s\n[End Thinking]", len(content), content)
 				}
+				assistantContent = append(assistantContent, api.ContentBlockParam{
+					Type:     "thinking",
+					Thinking: content,
+				})
 			}
 		}
 
@@ -612,8 +634,22 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 				userText := strings.Join(textParts, "\n\n")
 				// Update cache for channel retrieval
 				qe.lastAssistantText = userText
-				// Record to transcript
-				qe.RecordMessageToTranscript(transcript.MessageTypeAssistant, "assistant", []byte(userText))
+				// Record to transcript - store as JSON if thinking or tool_use blocks are present
+				// to ensure faithful conversation history on resume.
+				recordContent := []byte(userText)
+				hasThinkingOrTools := false
+				for _, b := range assistantContent {
+					if b.Type == "thinking" || b.Type == "tool_use" {
+						hasThinkingOrTools = true
+						break
+					}
+				}
+				if hasThinkingOrTools {
+					if jsonData, err := json.Marshal(assistantContent); err == nil {
+						recordContent = jsonData
+					}
+				}
+				qe.RecordMessageToTranscript(transcript.MessageTypeAssistant, "assistant", recordContent)
 				// If this is an intermediate turn (text + tool calls together), push text
 				// to channels immediately via TextCallback so users see LLM commentary
 				// in real-time rather than waiting for the full loop to finish.
@@ -643,9 +679,21 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 				if qe.TextCallback != nil {
 					qe.TextCallback(qe.lastAssistantText)
 				}
-			} else {
-				// LLM returned no text at all (e.g. only thinking blocks)
 				qe.lastAssistantText = "（模型未返回文字内容）"
+				
+				// Even if no text, if there are thinking blocks, record them
+				hasThinking := false
+				for _, b := range assistantContent {
+					if b.Type == "thinking" {
+						hasThinking = true
+						break
+					}
+				}
+				if hasThinking {
+					if jsonData, err := json.Marshal(assistantContent); err == nil {
+						qe.RecordMessageToTranscript(transcript.MessageTypeAssistant, "assistant", jsonData)
+					}
+				}
 			}
 
 			if qe.verbose {

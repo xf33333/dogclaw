@@ -47,7 +47,7 @@ func (t *NotifyChannelTool) InputSchema() types.ToolInputSchema {
 }
 
 func (t *NotifyChannelTool) Description(input map[string]any, opts types.ToolDescriptionOptions) string {
-	return "Send a message to a specific channel (QQ, WeChat, or CLI). Use this to notify users or groups, especially during background tasks."
+	return "Send a message to a specific channel (QQ, WeChat, or CLI). Use this to notify users or groups, especially during background tasks.定时任务可以使用，会话中除非用户主动说明才调用。"
 }
 
 func (t *NotifyChannelTool) Call(ctx context.Context, input map[string]any, toolCtx types.ToolUseContext, onProgress types.ToolCallProgress) (*types.ToolResult, error) {

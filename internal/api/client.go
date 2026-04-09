@@ -317,8 +317,9 @@ type MessageParam struct {
 // ContentBlockParam represents a content block in a message
 // See: https://docs.anthropic.com/en/api/messages#body-messages-content
 type ContentBlockParam struct {
-	Type      string `json:"type"`                  // "text", "tool_use", "tool_result", "image"
+	Type      string `json:"type"`                  // "text", "tool_use", "tool_result", "image", "thinking"
 	Text      string `json:"text,omitempty"`        // For text blocks
+	Thinking  string `json:"thinking,omitempty"`    // For thinking blocks (Anthropic)
 	ID        string `json:"id,omitempty"`          // For tool_use blocks
 	Name      string `json:"name,omitempty"`        // For tool_use blocks
 	Input     any    `json:"input,omitempty"`       // For tool_use blocks (JSON object)
@@ -343,11 +344,12 @@ type ToolChoice struct {
 
 // ContentBlock represents a content block in the response
 type ContentBlock struct {
-	Type  string `json:"type"`
-	Text  string `json:"text,omitempty"`
-	ID    string `json:"id,omitempty"`
-	Name  string `json:"name,omitempty"`
-	Input any    `json:"input,omitempty"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	Thinking string `json:"thinking,omitempty"` // For thinking blocks
+	ID       string `json:"id,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Input    any    `json:"input,omitempty"`
 }
 
 // Usage represents token usage
@@ -403,9 +405,10 @@ type OpenAICompatibleRequest struct {
 
 // OpenAIMessage represents a message in OpenAI format
 type OpenAIMessage struct {
-	Role       string           `json:"role"`
-	Content    any              `json:"content"` // string, nil, or []OpenAIContentBlock
-	Name       string           `json:"name,omitempty"`
+	Role             string           `json:"role"`
+	Content          any              `json:"content"` // string, nil, or []OpenAIContentBlock
+	ReasoningContent string           `json:"reasoning_content,omitempty"` // For thinking models
+	Name             string           `json:"name,omitempty"`
 	ToolCalls  []OpenAIToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string           `json:"tool_call_id,omitempty"`
 }
@@ -471,6 +474,7 @@ type OpenAIChoice struct {
 type OpenAIDelta struct {
 	Role      string           `json:"role,omitempty"`
 	Content   string           `json:"content,omitempty"`
+	Reasoning string           `json:"reasoning_content,omitempty"` // For thinking models
 	ToolCalls []OpenAIToolCall `json:"tool_calls,omitempty"`
 }
 
@@ -1179,6 +1183,14 @@ func (c *Client) convertFromOpenAIResponse(resp *OpenAIResponse) *MessageRespons
 	message := choice.Message
 
 	var contentBlocks []ContentBlock
+	
+	// Add reasoning content if present (common in DeepSeek or OpenAI o1 via proxies)
+	if message.ReasoningContent != "" {
+		contentBlocks = append(contentBlocks, ContentBlock{
+			Type:     "thinking",
+			Thinking: message.ReasoningContent,
+		})
+	}
 
 	// Add text content if present
 	if content, ok := message.Content.(string); ok && content != "" {

@@ -16,7 +16,7 @@ type Config struct {
 // DefaultConfig returns the default thinking config
 func DefaultConfig() *Config {
 	return &Config{
-		Enabled:      true,
+		Enabled:      false,
 		BudgetTokens: 32000, // Default thinking budget
 		Type:         "enabled",
 	}

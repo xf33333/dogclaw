@@ -277,13 +277,15 @@ func (c *WeixinChannel) getOrCreateSession(ctx context.Context, chatID string, f
 
 	engine := factory()
 	// TextCallback: fires for every LLM text block (both intermediate turns with tools
-	// and the final text-only reply). This ensures all LLM commentary reaches the user.
+	// and the final text-only reply). 
+	// Run in goroutine to avoid blocking the query engine loop if platform API is slow.
 	engine.TextCallback = func(text string) {
-		c.sendMessage(c.ctx, chatID, text)
+		go c.sendMessage(c.ctx, chatID, text)
 	}
 	// ToolCallCallback: sends a brief notification when a tool is called
+	// Run in goroutine to ensure UI updates don't delay tool execution.
 	engine.ToolCallCallback = func(toolName, summary string) {
-		c.sendMessage(c.ctx, chatID, fmt.Sprintf("🔧 %s", summary))
+		go c.sendMessage(c.ctx, chatID, fmt.Sprintf("🔧 %s", summary))
 	}
 	engine.AutoResumeLatestSession(context.Background())
 
@@ -350,6 +352,11 @@ func (c *WeixinChannel) sendMessage(ctx context.Context, toUserID, content strin
 	if content == "" {
 		return
 	}
+
+	// Create a dedicated context with a 30s timeout for outbound message delivery
+	// to prevent platform API hangs from blocking the engine or background tasks.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	if err := c.ensureSessionActive(); err != nil {
 		logger.Warnf("[weixin] Skip sending message: %v", err)

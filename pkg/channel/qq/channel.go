@@ -256,13 +256,15 @@ func (c *Channel) getOrCreateSession(chatID, creator string, newEngine channel.E
 	engine := newEngine()
 
 	// TextCallback: fires for every LLM text block (intermediate turns with tools
-	// and the final text-only reply). Delivers LLM commentary to QQ users in real-time.
+	// and the final text-only reply). 
+	// Run in goroutine to avoid blocking the query engine loop if platform API is slow.
 	engine.TextCallback = func(text string) {
-		sendFn(chatID, text)
+		go sendFn(chatID, text)
 	}
 	// ToolCallCallback: sends a brief notification when a tool is called
+	// Run in goroutine to ensure UI updates don't delay tool execution.
 	engine.ToolCallCallback = func(toolName, summary string) {
-		sendFn(chatID, fmt.Sprintf("🔧 %s", summary))
+		go sendFn(chatID, fmt.Sprintf("🔧 %s", summary))
 	}
 	
 	// Automatically resume latest session for this context
@@ -296,6 +298,11 @@ func (c *Channel) getReply(ctx context.Context, session *ChatSession, prompt str
 
 // sendMessage sends a reply to a QQ user or group
 func (c *Channel) sendMessage(ctx context.Context, chatID, kind string, content string) {
+	// Create a dedicated context with a 30s timeout for outbound message delivery
+	// to prevent platform API hangs from blocking the engine or background tasks.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	var msg *dto.MessageToCreate
 
 	if c.cfg.SendMarkdown {
