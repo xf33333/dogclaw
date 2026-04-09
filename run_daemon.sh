@@ -33,12 +33,12 @@ while true; do
     log "DogClaw 已停止，退出码: $EXIT_CODE"
     
     # 检查是否因为信号42退出
-    if [ "$EXIT_CODE" -eq 42 ]; then
+#    if [ "$EXIT_CODE" -eq 42 ]; then
         log "检测到重启信号（退出码42），准备重新启动..."
         sleep 1
-    else
-        log "非重启退出，守护进程停止"
-        exit "$EXIT_CODE"
-    fi
+#    else
+#        log "非重启退出，守护进程停止"
+#        exit "$EXIT_CODE"
+#    fi
 done
 

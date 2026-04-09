@@ -87,7 +87,7 @@ case "$1" in
         fi
         
         echo "正在向进程 $PID 发送重启信号 ($RESTART_SIGNAL)..."
-        kill -$RESTART_SIGNAL $PID
+        kill  $PID
         echo "信号已发送，服务将自动重启"
         log "已发送重启信号给进程 $PID"
         ;;
