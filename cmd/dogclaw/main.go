@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -34,6 +35,11 @@ const (
 	ModeGateway StartupMode = "gateway"
 	ModeOnboard StartupMode = "onboard"
 )
+
+func getRestartFlagPath() string {
+	// 获取临时目录路径
+	return filepath.Join(os.TempDir(), "dogclaw_restart.flag")
+}
 
 func setupSignalHandler(stopChan chan<- os.Signal) {
 	// 监听信号
@@ -149,6 +155,13 @@ func main() {
 
 // runAgent starts the agent in CLI interactive mode
 func runAgent(cfg *config.Config, settings *config.Settings) {
+	// 检查是否需要重启，如果有标志文件则删除
+	restartFlagPath := getRestartFlagPath()
+	if _, err := os.Stat(restartFlagPath); err == nil {
+		// 标志文件存在，删除它
+		os.Remove(restartFlagPath)
+	}
+
 	fmt.Println("🦞 DogClaw - AI Coding Assistant (Go Implementation)")
 	fmt.Println("Type your message or /help for commands. Ctrl+C to exit.")
 	fmt.Println()
@@ -208,6 +221,19 @@ func runAgent(cfg *config.Config, settings *config.Settings) {
 		response := qe.GetLastAssistantText()
 		if response != "" {
 			tm.Println(response)
+		}
+
+		// 检查是否需要重启
+		if qe.NeedsRestart() {
+			// 创建重启标志文件
+			if err := os.WriteFile(restartFlagPath, []byte("1"), 0644); err != nil {
+				tm.Printf("创建重启标志失败: %v\n", err)
+				return
+			}
+			// 以状态码 12 退出
+			tm.Println("程序将在 1 秒后重启...")
+			time.Sleep(1 * time.Second)
+			os.Exit(12)
 		}
 	}
 }
