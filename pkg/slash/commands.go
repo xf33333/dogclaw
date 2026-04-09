@@ -234,6 +234,24 @@ func RegisterBuiltinCommands(registry *CommandRegistry) {
 	})
 	
 	registry.Register(&Command{
+		Name:        "restart",
+		Aliases:     []string{"reboot"},
+		Description: "Restart the program",
+		Type:        LocalCommand,
+		Source:      "builtin",
+		Handler:     HandleRestart,
+	})
+
+	registry.Register(&Command{
+		Name:        "status",
+		Aliases:     []string{"stat"},
+		Description: "Show current session status",
+		Type:        LocalCommand,
+		Source:      "builtin",
+		Handler:     HandleStatus,
+	})
+
+	registry.Register(&Command{
 		Name:        "reset",
 		Description: "Clear conversation history (alias of clear)",
 		Type:        LocalCommand,
@@ -344,6 +362,22 @@ func HandleSessions(ctx context.Context, args string) (*CommandResult, error) {
 
 // HandleResume handles /resume command - actual logic in engine.handleResumeCommand
 func HandleResume(ctx context.Context, args string) (*CommandResult, error) {
+	// Just acknowledge - engine.handleSlashCommand will do the actual work
+	return &CommandResult{
+		Output: "", // empty output, engine will write logs
+	}, nil
+}
+
+// HandleStatus handles /status command - actual logic in engine.handleStatusCommand
+func HandleStatus(ctx context.Context, args string) (*CommandResult, error) {
+	// Just acknowledge - engine.handleSlashCommand will do the actual work
+	return &CommandResult{
+		Output: "", // empty output, engine will write logs
+	}, nil
+}
+
+// HandleRestart handles /restart command - actual logic in engine.handleSlashCommand
+func HandleRestart(ctx context.Context, args string) (*CommandResult, error) {
 	// Just acknowledge - engine.handleSlashCommand will do the actual work
 	return &CommandResult{
 		Output: "", // empty output, engine will write logs

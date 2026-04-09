@@ -123,6 +123,7 @@ type QueryEngine struct {
 	// logger is the logrus instance for structured logging
 	logger            *logrus.Logger
 	lastAssistantText string // cached text of most recent assistant reply (for channels)
+	needsRestart      bool   // whether the program needs to be restarted
 }
 
 // SetLogger sets the logger for the query engine
@@ -487,6 +488,17 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 			qe.logger.Info(out)
 		}
 
+	case "status":
+		out := qe.handleStatusCommand()
+		qe.lastAssistantText = out
+		qe.logger.Info(out)
+
+	case "restart":
+		qe.SetNeedsRestart(true)
+		msg := "重启命令已收到，程序即将重启..."
+		qe.lastAssistantText = msg
+		qe.logger.Info(msg)
+
 	default:
 		qe.logger.Info(result.Output)
 	}
@@ -643,6 +655,79 @@ func (qe *QueryEngine) handleResumeCommand(ctx context.Context, args string) (st
 
 	msg := fmt.Sprintf("✅ Resumed session: %s\n   Messages: %d, Turns: %d", qe.sessionID, len(qe.messages), qe.currentTurn)
 	return msg, nil
+}
+
+// handleStatusCommand handles /status command - shows detailed session info
+func (qe *QueryEngine) handleStatusCommand() string {
+	var sb strings.Builder
+	sb.WriteString("📊 Session Status:\n")
+	sb.WriteString(fmt.Sprintf("  • Session ID: %s\n", qe.sessionID))
+	sb.WriteString(fmt.Sprintf("  • Model: %s\n", qe.modelName))
+	sb.WriteString(fmt.Sprintf("  • Messages: %d\n", len(qe.messages)))
+	sb.WriteString(fmt.Sprintf("  • Turns: %d\n", qe.currentTurn))
+	sb.WriteString(fmt.Sprintf("  • Max Turns: %d\n", qe.maxTurns))
+	sb.WriteString(fmt.Sprintf("  • Verbose: %v\n", qe.verbose))
+	
+	// Show message types summary
+	var userMsgs, assistantMsgs int
+	for _, msg := range qe.messages {
+		switch msg.Role {
+		case "user":
+			userMsgs++
+		case "assistant":
+			assistantMsgs++
+		}
+	}
+	sb.WriteString(fmt.Sprintf("  • User Messages: %d\n", userMsgs))
+	sb.WriteString(fmt.Sprintf("  • Assistant Messages: %d\n", assistantMsgs))
+	
+	// Show last few messages if any
+	if len(qe.messages) > 0 {
+		sb.WriteString("  • Last Messages:\n")
+		// Show up to last 3 messages
+		start := 0
+		if len(qe.messages) > 3 {
+			start = len(qe.messages) - 3
+		}
+		for i := start; i < len(qe.messages); i++ {
+			msg := qe.messages[i]
+			role := "?"
+			switch msg.Role {
+			case "user":
+				role = "👤"
+			case "assistant":
+				role = "🤖"
+			}
+			// Get a string representation of content
+			contentStr := ""
+			switch v := msg.Content.(type) {
+			case string:
+				contentStr = v
+			case []api.ContentBlockParam:
+				// Just show first text block
+				for _, block := range v {
+					if block.Type == "text" && block.Text != "" {
+						contentStr = block.Text
+						break
+					}
+				}
+				if contentStr == "" {
+					contentStr = fmt.Sprintf("[%d blocks]", len(v))
+				}
+			default:
+				contentStr = fmt.Sprintf("[%T]", v)
+			}
+			// Truncate message content
+			if len(contentStr) > 60 {
+				contentStr = contentStr[:57] + "..."
+			}
+			// Escape newlines
+			contentStr = strings.ReplaceAll(contentStr, "\n", " ")
+			sb.WriteString(fmt.Sprintf("    %d. %s: %s\n", i+1, role, contentStr))
+		}
+	}
+
+	return sb.String()
 }
 
 // AutoResumeLatestSession automatically resumes the most recent session if one exists.
@@ -1037,6 +1122,16 @@ func (qe *QueryEngine) ForceSnip() *compact.SnipResult {
 		qe.messages = result.Remaining
 	}
 	return result
+}
+
+// NeedsRestart returns whether the program needs to be restarted
+func (qe *QueryEngine) NeedsRestart() bool {
+	return qe.needsRestart
+}
+
+// SetNeedsRestart sets whether the program needs to be restarted
+func (qe *QueryEngine) SetNeedsRestart(needsRestart bool) {
+	qe.needsRestart = needsRestart
 }
 
 // initTranscript initializes the transcript system for the current session.
