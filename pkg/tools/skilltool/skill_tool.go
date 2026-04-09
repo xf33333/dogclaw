@@ -7,9 +7,9 @@ import (
 	"strings"
 
 	"dogclaw/internal/config"
+	"dogclaw/pkg/bootstrap" // Assuming we need session ID or CWD from here
 	"dogclaw/pkg/skills"
 	"dogclaw/pkg/types"
-	"dogclaw/pkg/bootstrap" // Assuming we need session ID or CWD from here
 	"path/filepath"
 )
 
@@ -60,7 +60,7 @@ func (t *SkillTool) Description(input map[string]any, opts types.ToolDescription
 	return "Discover, execute, and install custom prompt-based skills. " +
 		"Use 'list' to see all skills, 'search' to find relevant skills, " +
 		"'run' to execute a specific skill with arguments, " +
-		"and 'install' to save a new skill to the user's directory."
+		"if install skill,you should manually create the directory in ~/.dogclaw/skills/<skill-name>/ and write all necessary files (SKILL.md, scripts, etc.) using file tools."
 }
 
 func (t *SkillTool) Call(ctx context.Context, input map[string]any, toolCtx types.ToolUseContext, onProgress types.ToolCallProgress) (*types.ToolResult, error) {
@@ -88,9 +88,7 @@ func (t *SkillTool) Call(ctx context.Context, input map[string]any, toolCtx type
 	case "run":
 		args, _ := input["arguments"].(map[string]any)
 		return t.handleRun(loadedSkills, query, args, cwd)
-	case "install":
-		content, _ := input["content"].(string)
-		return t.handleInstall(query, content)
+
 	default:
 		return &types.ToolResult{
 			Data:    "Invalid action",
@@ -121,12 +119,12 @@ func (t *SkillTool) handleList(allSkills []*skills.Skill) (*types.ToolResult, er
 func (t *SkillTool) handleSearch(allSkills []*skills.Skill, query string) (*types.ToolResult, error) {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Search results for '%s':\n\n", query))
-	
+
 	count := 0
 	queryLower := strings.ToLower(query)
 	for _, s := range allSkills {
-		if strings.Contains(strings.ToLower(s.Name), queryLower) || 
-		   strings.Contains(strings.ToLower(s.Description), queryLower) {
+		if strings.Contains(strings.ToLower(s.Name), queryLower) ||
+			strings.Contains(strings.ToLower(s.Description), queryLower) {
 			sb.WriteString(fmt.Sprintf("- **%s**: %s\n", s.Name, s.Description))
 			count++
 		}

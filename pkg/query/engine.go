@@ -1633,6 +1633,7 @@ func parseMemoryIndexLinks(content string) []string {
 	}
 	return results
 }
+
 // BuildSystemPrompt builds the system prompt with tool descriptions
 func BuildSystemPrompt(tools []types.Tool, loadedSkills []*skills.Skill, customPrompt string) string {
 	var sb strings.Builder
@@ -1658,7 +1659,10 @@ func BuildSystemPrompt(tools []types.Tool, loadedSkills []*skills.Skill, customP
 
 	if len(loadedSkills) > 0 {
 		sb.WriteString("\n## Available Skills\n\n")
-		sb.WriteString("Skills are custom prompt-based capabilities. Use the 'Skill' tool to run them.\n\n")
+		sb.WriteString("Skills are custom prompt-based capabilities stored in ~/.dogclaw/skills/. Use the 'Skill' tool to run them.\n")
+		//sb.WriteString("To install a new skill:\n")
+		//sb.WriteString("- For simple skills (single SKILL.md), use 'Skill' tool with action 'install'.\n")
+		//sb.WriteString("- For complex skills (multiple files), manually create ~/.dogclaw/skills/<skill-name>/ and write SKILL.md plus any other assets using file tools.\n\n")
 		for _, s := range loadedSkills {
 			sb.WriteString(fmt.Sprintf("- **%s**: %s\n", s.Name, s.Description))
 		}
