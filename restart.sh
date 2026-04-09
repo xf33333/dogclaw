@@ -40,15 +40,15 @@ case "$1" in
 
     restart)
         PID=$(pgrep -f "$APP_NAME")
-        if [ -z "$PID" ]; then
-            echo "错误: 未发现正在运行的进程 $APP_NAME，尝试直接 start..."
-            bash "$0" start
-        else
+#        if [ -z "$PID" ]; then
+#            echo "错误: 未发现正在运行的进程 $APP_NAME，尝试直接 start..."
+#            bash "$0" start
+#        else
             make
             echo "正在向进程 $PID 发送重启信号 ($RESTART_SIGNAL)..."
             kill  $PID
             echo "信号已发送。"
-        fi
+#        fi
         ;;
 
     build)
