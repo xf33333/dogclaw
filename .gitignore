@@ -2,7 +2,7 @@
 build
 logs
 /dogclaw
-
+bin
 # 重启脚本状态文件
 .dogclaw.pid
 .dogclaw.args

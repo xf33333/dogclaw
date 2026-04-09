@@ -35,10 +35,30 @@ const (
 	ModeOnboard StartupMode = "onboard"
 )
 
+func setupSignalHandler() {
+	// 监听信号
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGTERM, syscall.Signal(42), syscall.SIGINT)
+
+	fmt.Printf("进程已启动，PID: %d\n", os.Getpid())
+
+	// 在 goroutine 中监听信号
+	go func() {
+		sig := <-sigs
+		fmt.Printf("\n收到信号: %v\n", sig)
+
+		// 如果是信号 42，以状态码 42 退出
+		if sig == syscall.Signal(42) {
+			os.Exit(42)
+		}
+		// 其他信号正常退出
+		os.Exit(0)
+	}()
+}
 func main() {
 	// Print version / build info
 	PrintVersion()
-
+	setupSignalHandler()
 	// Ensure AGENT.md exists in ~/.dogclaw
 	if err := config.EnsureAgentMarkdownExists(); err != nil {
 		fmt.Printf("⚠️  Warning: Failed to ensure AGENT.md exists: %v\n", err)
