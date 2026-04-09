@@ -5,9 +5,64 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"dogclaw/internal/api"
 )
+
+func makeTimestamp() int64 {
+	return time.Now().UnixMilli()
+}
+
+// CompactedSession holds the compacted session state for persistence
+type CompactedSession struct {
+	Version           string                 `json:"version"`
+	Timestamp         int64                  `json:"timestamp"`
+	OriginalMessages  int                    `json:"original_messages"`
+	CompactedMessages int                    `json:"compacted_messages"`
+	PreTokens         int                    `json:"pre_tokens"`
+	PostTokens        int                    `json:"post_tokens"`
+	Messages          []api.MessageParam     `json:"messages"`
+}
+
+const compactedSessionVersion = "1.0"
+
+// SerializeCompactedSession serializes a compact result and messages to JSON
+func SerializeCompactedSession(result *CompactResult, messages []api.MessageParam) (string, error) {
+	if result == nil {
+		return "", fmt.Errorf("compact result is nil")
+	}
+
+	session := CompactedSession{
+		Version:           compactedSessionVersion,
+		Timestamp:         nowUnixMilli(),
+		OriginalMessages:  result.OriginalMessageCount,
+		CompactedMessages: result.CompactedMessageCount,
+		PreTokens:         result.PreCompactTokenCount,
+		PostTokens:        result.PostCompactTokenCount,
+		Messages:          messages,
+	}
+
+	data, err := json.Marshal(session)
+	if err != nil {
+		return "", fmt.Errorf("marshal compacted session: %w", err)
+	}
+
+	return string(data), nil
+}
+
+// DeserializeCompactedSession deserializes JSON back to CompactedSession
+func DeserializeCompactedSession(data string) (*CompactedSession, error) {
+	var session CompactedSession
+	if err := json.Unmarshal([]byte(data), &session); err != nil {
+		return nil, fmt.Errorf("unmarshal compacted session: %w", err)
+	}
+	return &session, nil
+}
+
+func nowUnixMilli() int64 {
+	return makeTimestamp()
+}
 
 // AutoCompactConfig holds configuration for automatic context compaction
 type AutoCompactConfig struct {

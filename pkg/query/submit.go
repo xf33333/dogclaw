@@ -388,6 +388,8 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 							result.OriginalMessageCount, result.CompactedMessageCount,
 							result.PreCompactTokenCount, result.PostCompactTokenCount)
 					}
+					// Save the compacted session to transcript metadata
+					_ = qe.saveCompactedSession(result)
 				}
 			} else {
 				// Check for warning state
@@ -821,6 +823,8 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 							result.OriginalMessageCount, result.CompactedMessageCount,
 							result.PreCompactTokenCount, result.PostCompactTokenCount)
 					}
+					// Save the compacted session to transcript metadata
+					_ = qe.saveCompactedSession(result)
 				}
 			} else {
 				warning, isBlocking := compact.GetWarningState(tokenCount, qe.compactConfig)
@@ -1348,6 +1352,8 @@ func (qe *QueryEngine) tryRecoverFromContextExceeded(ctx context.Context, err er
 					result.OriginalMessageCount, result.CompactedMessageCount,
 					result.PreCompactTokenCount, result.PostCompactTokenCount)
 			}
+			// Save the compacted session to transcript metadata
+			_ = qe.saveCompactedSession(result)
 			return true, nil
 		}
 	}
@@ -1440,6 +1446,8 @@ func (qe *QueryEngine) tryRecoverFromTimeout(ctx context.Context, err error) (bo
 				qe.logger.Debugf("[✅ Compact recovery succeeded: %d → %d messages]",
 					result.OriginalMessageCount, result.CompactedMessageCount)
 			}
+			// Save the compacted session to transcript metadata
+			_ = qe.saveCompactedSession(result)
 			return true, nil
 		}
 		if qe.verbose {

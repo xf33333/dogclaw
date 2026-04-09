@@ -1188,6 +1188,50 @@ func (qe *QueryEngine) ResumeFromTranscript(sessionID string) error {
 	}
 
 	tf := qe.transcriptProjectMgr.GetTranscriptFile(sessionID, qe.cwd)
+
+	// Step 1: 优先尝试从元数据加载已压缩的会话
+	meta, err := tf.ReadMetadata()
+	if err == nil {
+		if compactedData, ok := meta[string(transcript.MetadataCompaction)]; ok && compactedData != "" {
+			// 有已压缩的会话数据，直接加载
+			compactedSession, err := compact.DeserializeCompactedSession(compactedData)
+			if err == nil && compactedSession != nil {
+				// 使用压缩后的消息
+				qe.messages = compactedSession.Messages
+				// 计算回合数
+				turns := 0
+				for _, msg := range qe.messages {
+					if msg.Role == "assistant" {
+						turns++
+					}
+				}
+				qe.currentTurn = turns
+				qe.sessionID = sessionID
+				qe.transcriptFile = tf
+
+				if qe.verbose {
+					qe.logger.Debugf("[Resume] Loaded compacted session: %s — %d messages (from %d original), %d turns, saved at %d",
+						sessionID, len(qe.messages), compactedSession.OriginalMessages, turns, compactedSession.Timestamp)
+				}
+
+				// 加载其他元数据
+				if info, err := tf.Replay(); err == nil && info.Stats.MetadataEntries > 0 {
+					qe.restoreTranscriptMetadata(tf)
+				}
+
+				// 标记为已压缩，避免再次压缩
+				qe.compactTracker.Compacted = true
+
+				// 不需要再调用 autoCompactAfterResume
+				return nil
+			}
+			if qe.verbose {
+				qe.logger.Warnf("[Resume] Failed to deserialize compacted session, falling back to full replay: %v", err)
+			}
+		}
+	}
+
+	// Step 2: 如果没有压缩数据或加载失败，回退到完整重放
 	info, err := tf.Replay()
 	if err != nil {
 		return fmt.Errorf("failed to replay transcript: %w", err)
@@ -1223,6 +1267,38 @@ func (qe *QueryEngine) ResumeFromTranscript(sessionID string) error {
 	return nil
 }
 
+// saveCompactedSession saves the current compacted messages to transcript metadata
+func (qe *QueryEngine) saveCompactedSession(result *compact.CompactResult) error {
+	if qe.transcriptFile == nil || result == nil {
+		return nil // No transcript file or result, nothing to save
+	}
+
+	// Serialize the compacted session
+	compactedData, err := compact.SerializeCompactedSession(result, qe.messages)
+	if err != nil {
+		if qe.verbose {
+			qe.logger.Warnf("[Compact] Failed to serialize compacted session: %v", err)
+		}
+		return err
+	}
+
+	// Save to transcript metadata
+	if err := qe.transcriptFile.WriteMetadata(string(transcript.MetadataCompaction), compactedData); err != nil {
+		if qe.verbose {
+			qe.logger.Warnf("[Compact] Failed to write compacted session to metadata: %v", err)
+		}
+		return err
+	}
+
+	if qe.verbose {
+		qe.logger.Debugf("[Compact] Saved compacted session to metadata: %d -> %d messages, %d -> %d tokens",
+			result.OriginalMessageCount, result.CompactedMessageCount,
+			result.PreCompactTokenCount, result.PostCompactTokenCount)
+	}
+
+	return nil
+}
+
 // autoCompactAfterResume checks if the resumed session exceeds limits
 // and performs automatic compaction if needed.
 func (qe *QueryEngine) autoCompactAfterResume() {
@@ -1249,6 +1325,8 @@ func (qe *QueryEngine) autoCompactAfterResume() {
 						result.OriginalMessageCount, result.CompactedMessageCount,
 						result.PreCompactTokenCount, result.PostCompactTokenCount)
 				}
+				// Save the compacted session to transcript metadata
+				_ = qe.saveCompactedSession(result)
 			}
 		} else {
 			// 检查警告状态
