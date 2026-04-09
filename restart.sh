@@ -12,7 +12,7 @@ APP_CMD="./$BINARY_NAME gateway"
 APP_NAME="$BINARY_NAME gateway"
 LOG_DIR="logs"
 LOG_FILE="$LOG_DIR/app.log"
-RESTART_SIGNAL=42
+RESTART_SIGNAL=12
 
 mkdir -p "$LOG_DIR"
 
@@ -87,7 +87,7 @@ case "$1" in
         fi
         
         echo "正在向进程 $PID 发送重启信号 ($RESTART_SIGNAL)..."
-        kill  $PID
+        kill -$RESTART_SIGNAL $PID
         echo "信号已发送，服务将自动重启"
         log "已发送重启信号给进程 $PID"
         ;;

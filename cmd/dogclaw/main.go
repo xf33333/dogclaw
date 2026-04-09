@@ -38,7 +38,7 @@ const (
 func setupSignalHandler() {
 	// 监听信号
 	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGTERM, syscall.Signal(42), syscall.SIGINT)
+	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGUSR2, syscall.SIGINT)
 
 	fmt.Printf("进程已启动，PID: %d\n", os.Getpid())
 
@@ -47,9 +47,9 @@ func setupSignalHandler() {
 		sig := <-sigs
 		fmt.Printf("\n收到信号: %v\n", sig)
 
-		// 如果是信号 42，以状态码 42 退出
-		if sig == syscall.Signal(42) {
-			os.Exit(42)
+		// 如果是 SIGUSR2 信号，以状态码 12 退出
+		if sig == syscall.SIGUSR2 {
+			os.Exit(12)
 		}
 		// 其他信号正常退出
 		os.Exit(0)
