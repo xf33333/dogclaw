@@ -33,13 +33,15 @@ case "$1" in
         else
             echo "正在启动 $APP_NAME..."
             # 使用 nohup 在后台运行守护函数
-            nohup bash "$0" daemon_internal >> $LOG_FILE 2>&1 &
+            #nohup bash "$0" daemon_internal >> $LOG_FILE 2>&1 &
+            do_daemon
             echo "启动成功，日志请查看 $LOG_FILE"
         fi
         ;;
 
     restart)
         PID=$(pgrep -f "$APP_NAME")
+        #PID=$(cat ".dogclaw.pid" 2>/dev/null)
 #        if [ -z "$PID" ]; then
 #            echo "错误: 未发现正在运行的进程 $APP_NAME，尝试直接 start..."
 #            bash "$0" start
@@ -53,7 +55,7 @@ case "$1" in
 
     build)
         # 内部参数，不对外暴露，仅供 start 指令调用
-        make
+        do_daemon
         ;;
 
     *)
