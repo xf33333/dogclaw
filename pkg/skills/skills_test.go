@@ -84,3 +84,29 @@ Hello world
 		t.Errorf("Expected skill name 'hello', got '%s'", skills[0].Name)
 	}
 }
+
+func TestAllowedTools(t *testing.T) {
+	content := `---
+name: test-skill
+allowed-tools: tool1, tool2, tool3
+---
+Content`
+	skill, _ := ParseSkill(content, "test.md", "test", SourceUser)
+	tools := skill.GetAllowedTools()
+	if len(tools) != 3 || tools[0] != "tool1" || tools[1] != "tool2" || tools[2] != "tool3" {
+		t.Errorf("Expected [tool1 tool2 tool3], got %v", tools)
+	}
+
+	contentList := `---
+name: test-skill
+allowed-tools:
+  - t1
+  - t2
+---
+Content`
+	skill2, _ := ParseSkill(contentList, "test.md", "test", SourceUser)
+	tools2 := skill2.GetAllowedTools()
+	if len(tools2) != 2 || tools2[0] != "t1" || tools2[1] != "t2" {
+		t.Errorf("Expected [t1 t2], got %v", tools2)
+	}
+}

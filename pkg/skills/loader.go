@@ -61,7 +61,7 @@ func LoadSkillFromFile(filePath string, name string, source SkillSource) (*Skill
 // ParseSkill parses the content of a SKILL.md file (YAML frontmatter + Markdown)
 func ParseSkill(content string, filePath string, name string, source SkillSource) (*Skill, error) {
 	const separator = "---"
-	
+
 	trimmedContent := strings.TrimSpace(content)
 	if !strings.HasPrefix(trimmedContent, separator) {
 		return &Skill{
@@ -76,11 +76,11 @@ func ParseSkill(content string, filePath string, name string, source SkillSource
 
 	// Find the second separator
 	parts := strings.SplitN(trimmedContent, separator, 3)
-	// strings.SplitN with separator "---" on "---yaml---markdown" 
+	// strings.SplitN with separator "---" on "---yaml---markdown"
 	// parts[0] is empty (before the first ---)
 	// parts[1] is the yaml
 	// parts[2] is the markdown
-	
+
 	if len(parts) < 3 {
 		return &Skill{
 			Name:            name,
@@ -119,8 +119,8 @@ func ParseSkill(content string, filePath string, name string, source SkillSource
 
 // DiscoverSkills looks for skills in standard locations:
 // 1. Managed skills (TBD)
-// 2. User skills (~/.claude/skills or ~/.dogclaw/skills)
-// 3. Project skills (.claude/skills in project root and parent dirs)
+// 2. User skills ( ~/.dogclaw/skills)
+// 3. Project skills (.dogclaw/skills in project root and parent dirs)
 func DiscoverSkills(cwd string) ([]*Skill, error) {
 	var allSkills []*Skill
 
@@ -130,19 +130,17 @@ func DiscoverSkills(cwd string) ([]*Skill, error) {
 		userSkillsDir := filepath.Join(home, ".dogclaw", "skills")
 		skills, _ := LoadSkillsFromDir(userSkillsDir, SourceUser)
 		allSkills = append(allSkills, skills...)
-		
-		// Also check .claude for compatibility if specified or as fallback
-		claudeSkillsDir := filepath.Join(home, ".claude", "skills")
-		if claudeSkillsDir != userSkillsDir {
-			cSkills, _ := LoadSkillsFromDir(claudeSkillsDir, SourceUser)
-			allSkills = append(allSkills, cSkills...)
-		}
+
+		agentSkillsDir := filepath.Join(home, ".agents", "skills")
+		agentSkills, _ := LoadSkillsFromDir(agentSkillsDir, SourceUser)
+		allSkills = append(allSkills, agentSkills...)
+
 	}
 
 	// 2. Project skills (walking up from cwd)
 	curr := cwd
 	for {
-		projectSkillsDir := filepath.Join(curr, ".claude", "skills")
+		projectSkillsDir := filepath.Join(curr, ".dogclaw", "skills")
 		skills, _ := LoadSkillsFromDir(projectSkillsDir, SourceProject)
 		allSkills = append(allSkills, skills...)
 
@@ -154,6 +152,6 @@ func DiscoverSkills(cwd string) ([]*Skill, error) {
 	}
 
 	// TODO: Deduplicate by name or file path if necessary
-	
+
 	return allSkills, nil
 }

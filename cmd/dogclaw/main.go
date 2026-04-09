@@ -17,6 +17,7 @@ import (
 	"dogclaw/pkg/channel/weixin"
 	"dogclaw/pkg/commands"
 	"dogclaw/pkg/query"
+	"dogclaw/pkg/skills"
 	"dogclaw/pkg/slash"
 	"dogclaw/pkg/terminal"
 	"dogclaw/pkg/tools"
@@ -210,7 +211,9 @@ func newEngineFactory(cfg *config.Config, settings *config.Settings, registry *c
 	return func() *query.QueryEngine {
 		client := api.NewClient(cfg.APIKey, cfg.Model, cfg.BaseURL)
 		toolList := buildTools(registry)
-		systemPrompt := query.BuildSystemPrompt(toolList, "")
+		cwd, _ := os.Getwd()
+		loadedSkills, _ := skills.DiscoverSkills(cwd)
+		systemPrompt := query.BuildSystemPrompt(toolList, loadedSkills, "")
 		qe := query.NewQueryEngine(client, toolList, systemPrompt, cfg.MaxTurns)
 		qe.SetVerbose(cfg.Verbose)
 		qe.SetShowToolUsageInReply(cfg.ShowToolUsageInReply)

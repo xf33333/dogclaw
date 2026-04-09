@@ -428,8 +428,13 @@ func (c *WeixinChannel) sendMessage(ctx context.Context, toUserID, content strin
 		}
 
 		if resp.Ret == -2 {
-			logger.Warnf("[weixin] Token invalid (ret=-2) for user %s, deleting cache and retrying (attempt %d/%d)...", toUserID, attempt+1, maxRetries)
+			logger.Warnf("[weixin] Token invalid (ret=-2) for user %s, deleting all caches and retrying (attempt %d/%d)...", toUserID, attempt+1, maxRetries)
+			// 清除 context token
 			c.contextTokens.Delete(toUserID)
+			// 也清除 typing ticket 缓存，强制重新获取
+			c.typingMu.Lock()
+			delete(c.typingCache, toUserID)
+			c.typingMu.Unlock()
 			if attempt < maxRetries {
 				time.Sleep(1 * time.Second)
 				continue

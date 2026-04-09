@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"strings"
 )
 
 // SkillSource defines where a skill was loaded from
@@ -23,7 +24,7 @@ type Frontmatter struct {
 	Model                  string   `yaml:"model"`
 	DisableModelInvocation bool     `yaml:"disable-model-invocation"`
 	UserInvocable          *bool    `yaml:"user-invocable"`
-	AllowedTools           []string `yaml:"allowed-tools"`
+	AllowedTools           any      `yaml:"allowed-tools"`
 	Paths                  any      `yaml:"paths"` // can be string or []string
 	Effort                 string   `yaml:"effort"`
 	Context                string   `yaml:"context"`
@@ -82,6 +83,38 @@ func (s *Skill) GetPaths() []string {
 			return nil
 		}
 		return []string{v}
+	case []string:
+		return v
+	case []any:
+		var result []string
+		for _, item := range v {
+			if str, ok := item.(string); ok {
+				result = append(result, str)
+			}
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+// GetAllowedTools returns the allowed tools for the skill
+func (s *Skill) GetAllowedTools() []string {
+	switch v := s.Frontmatter.AllowedTools.(type) {
+	case string:
+		if v == "" {
+			return nil
+		}
+		// Handle comma-separated list
+		parts := strings.Split(v, ",")
+		var result []string
+		for _, p := range parts {
+			trimmed := strings.TrimSpace(p)
+			if trimmed != "" {
+				result = append(result, trimmed)
+			}
+		}
+		return result
 	case []string:
 		return v
 	case []any:

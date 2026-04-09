@@ -24,6 +24,7 @@ import (
 	"dogclaw/pkg/history"
 	"dogclaw/pkg/memory"
 	"dogclaw/pkg/semantic"
+	"dogclaw/pkg/skills"
 	"dogclaw/pkg/slash"
 	"dogclaw/pkg/thinking"
 	"dogclaw/pkg/transcript"
@@ -1632,9 +1633,8 @@ func parseMemoryIndexLinks(content string) []string {
 	}
 	return results
 }
-
 // BuildSystemPrompt builds the system prompt with tool descriptions
-func BuildSystemPrompt(tools []types.Tool, customPrompt string) string {
+func BuildSystemPrompt(tools []types.Tool, loadedSkills []*skills.Skill, customPrompt string) string {
 	var sb strings.Builder
 
 	if customPrompt != "" {
@@ -1654,6 +1654,14 @@ func BuildSystemPrompt(tools []types.Tool, customPrompt string) string {
 		}
 		sb.WriteString(fmt.Sprintf("- **%s**: %s\n", tool.Name(),
 			tool.Description(nil, types.ToolDescriptionOptions{})))
+	}
+
+	if len(loadedSkills) > 0 {
+		sb.WriteString("\n## Available Skills\n\n")
+		sb.WriteString("Skills are custom prompt-based capabilities. Use the 'Skill' tool to run them.\n\n")
+		for _, s := range loadedSkills {
+			sb.WriteString(fmt.Sprintf("- **%s**: %s\n", s.Name, s.Description))
+		}
 	}
 
 	return sb.String()

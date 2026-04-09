@@ -6,9 +6,11 @@ import (
 	"os"
 	"strings"
 
+	"dogclaw/internal/config"
 	"dogclaw/pkg/skills"
 	"dogclaw/pkg/types"
 	"dogclaw/pkg/bootstrap" // Assuming we need session ID or CWD from here
+	"path/filepath"
 )
 
 // SkillTool implements the tool for discovering and using skills
@@ -34,8 +36,8 @@ func (t *SkillTool) InputSchema() types.ToolInputSchema {
 		Properties: map[string]any{
 			"action": map[string]any{
 				"type":        "string",
-				"description": "The action to perform: 'list', 'search', or 'run'",
-				"enum":        []string{"list", "search", "run"},
+				"description": "The action to perform: 'list', 'search', 'run', or 'install'",
+				"enum":        []string{"list", "search", "run", "install"},
 			},
 			"query": map[string]any{
 				"type":        "string",
@@ -45,15 +47,20 @@ func (t *SkillTool) InputSchema() types.ToolInputSchema {
 				"type":        "object",
 				"description": "Arguments for the skill (key-value pairs)",
 			},
+			"content": map[string]any{
+				"type":        "string",
+				"description": "The markdown content for the skill (required for 'install' action)",
+			},
 		},
 		Required: []string{"action"},
 	}
 }
 
 func (t *SkillTool) Description(input map[string]any, opts types.ToolDescriptionOptions) string {
-	return "Discover and execute custom prompt-based skills. " +
+	return "Discover, execute, and install custom prompt-based skills. " +
 		"Use 'list' to see all skills, 'search' to find relevant skills, " +
-		"and 'run' to execute a specific skill with arguments."
+		"'run' to execute a specific skill with arguments, " +
+		"and 'install' to save a new skill to the user's directory."
 }
 
 func (t *SkillTool) Call(ctx context.Context, input map[string]any, toolCtx types.ToolUseContext, onProgress types.ToolCallProgress) (*types.ToolResult, error) {
@@ -81,6 +88,9 @@ func (t *SkillTool) Call(ctx context.Context, input map[string]any, toolCtx type
 	case "run":
 		args, _ := input["arguments"].(map[string]any)
 		return t.handleRun(loadedSkills, query, args, cwd)
+	case "install":
+		content, _ := input["content"].(string)
+		return t.handleInstall(query, content)
 	default:
 		return &types.ToolResult{
 			Data:    "Invalid action",
@@ -162,6 +172,49 @@ func (t *SkillTool) handleRun(allSkills []*skills.Skill, skillName string, input
 
 	return &types.ToolResult{
 		Data: fmt.Sprintf("Executed skill '%s'. Resulting prompt:\n\n%s", skillName, content),
+	}, nil
+}
+
+func (t *SkillTool) handleInstall(name string, content string) (*types.ToolResult, error) {
+	if name == "" {
+		return &types.ToolResult{
+			Data:    "Action 'install' requires a 'query' (skill name).",
+			IsError: true,
+		}, nil
+	}
+	if content == "" {
+		return &types.ToolResult{
+			Data:    "Action 'install' requires 'content'.",
+			IsError: true,
+		}, nil
+	}
+
+	settingsDir, err := config.GetSettingsDir()
+	if err != nil {
+		return &types.ToolResult{
+			Data:    fmt.Sprintf("Error getting settings directory: %v", err),
+			IsError: true,
+		}, nil
+	}
+
+	skillDir := filepath.Join(settingsDir, "skills", name)
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		return &types.ToolResult{
+			Data:    fmt.Sprintf("Error creating skill directory: %v", err),
+			IsError: true,
+		}, nil
+	}
+
+	skillFilePath := filepath.Join(skillDir, "SKILL.md")
+	if err := os.WriteFile(skillFilePath, []byte(content), 0644); err != nil {
+		return &types.ToolResult{
+			Data:    fmt.Sprintf("Error writing skill file: %v", err),
+			IsError: true,
+		}, nil
+	}
+
+	return &types.ToolResult{
+		Data: fmt.Sprintf("Successfully installed skill '%s' to %s", name, skillFilePath),
 	}, nil
 }
 
