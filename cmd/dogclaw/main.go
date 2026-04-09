@@ -209,7 +209,7 @@ func buildTools(registry *channel.Registry) []types.Tool {
 // newEngineFactory creates a factory function for building QueryEngine instances
 func newEngineFactory(cfg *config.Config, settings *config.Settings, registry *channel.Registry) func() *query.QueryEngine {
 	return func() *query.QueryEngine {
-		client := api.NewClient(cfg.APIKey, cfg.Model, cfg.BaseURL)
+		client := api.NewClient(cfg.APIKey, cfg.Model, cfg.BaseURL, cfg.Provider)
 		toolList := buildTools(registry)
 		cwd, _ := os.Getwd()
 		loadedSkills, _ := skills.DiscoverSkills(cwd)

@@ -199,13 +199,18 @@ func (lb *LeakyBucket) refill() {
 	lb.lastRefill = now
 }
 
-// NewClient creates a new API client with auto-detection of provider
-func NewClient(apiKey, model, baseURL string) *Client {
+// NewClient creates a new API client with optional explicit provider or auto-detection
+func NewClient(apiKey, model, baseURL, provider string) *Client {
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
 
-	provider := detectProvider(baseURL, model)
+	var p ProviderType
+	if provider != "" {
+		p = ProviderType(strings.ToLower(provider))
+	} else {
+		p = detectProvider(baseURL, model)
+	}
 
 	return &Client{
 		HTTPClient: &http.Client{
@@ -214,7 +219,7 @@ func NewClient(apiKey, model, baseURL string) *Client {
 		APIKey:      apiKey,
 		BaseURL:     baseURL,
 		Model:       model,
-		Provider:    provider,
+		Provider:    p,
 		rateLimiter: NewLeakyBucket(defaultRate, defaultBurst),
 	}
 }
@@ -683,10 +688,10 @@ func (c *Client) sendOpenAICompatibleRequest(ctx context.Context, req *MessageRe
 
 	// OpenRouter uses /v1/chat/completions endpoint
 	// Handle baseURL that already ends with /v1 to avoid double /v1/
-	endpoint := c.BaseURL + "/v1/chat/completions"
-	if strings.HasSuffix(c.BaseURL, "/v1") {
-		endpoint = c.BaseURL + "/chat/completions"
-	}
+	//endpoint := c.BaseURL + "/v1/chat/completions"
+	//if strings.HasSuffix(c.BaseURL, "/v1") {
+	endpoint := c.BaseURL + "/chat/completions"
+	//}
 
 	// Track consecutive failures for leaky bucket adjustment
 	var consecutiveTimeouts int
@@ -694,7 +699,7 @@ func (c *Client) sendOpenAICompatibleRequest(ctx context.Context, req *MessageRe
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		// Log attempt
-		logger.Debug("[OpenRouter] Sending request to %s (attempt %d/%d)...", endpoint, attempt+1, maxRetries+1)
+		logger.Info("[OpenAI] Sending request to %s (attempt %d/%d)...", endpoint, attempt+1, maxRetries+1)
 
 		// Wait for rate limiter before each attempt
 		c.notifyActivity()
@@ -784,8 +789,8 @@ func (c *Client) doOpenAIRequest(ctx context.Context, endpoint string, body []by
 	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
 
 	// OpenRouter specific headers
-	httpReq.Header.Set("HTTP-Referer", "https://github.com/xf33333/dogclaw")
-	httpReq.Header.Set("X-Title", "DogClaw")
+	//httpReq.Header.Set("HTTP-Referer", "https://github.com/xf33333/dogclaw")
+	//httpReq.Header.Set("X-Title", "DogClaw")
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {

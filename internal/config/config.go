@@ -7,6 +7,7 @@ import (
 // Config holds the main configuration for DogClaw
 type Config struct {
 	APIKey               string
+	Provider             string
 	Model                string
 	BaseURL              string
 	MaxTurns             int
@@ -41,6 +42,7 @@ func ConfigFromSettings(s *Settings) (*Config, error) {
 		return nil, err
 	}
 
+	cfg.Provider = active.Provider
 	cfg.Model = active.Model
 	cfg.BaseURL = active.URL
 	cfg.MaxTurns = s.MaxTurns
