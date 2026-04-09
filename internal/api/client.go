@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"dogclaw/internal/logger"
+	"dogclaw/pkg/usage"
 )
 
 const (
@@ -129,6 +130,7 @@ type Client struct {
 	BaseURL     string
 	Model       string
 	Provider    ProviderType
+	SessionID   string
 	rateLimiter *LeakyBucket
 
 	// OnActivity is called during long-running operations (like 429 retries)
@@ -522,14 +524,31 @@ func (c *Client) SendMessage(ctx context.Context, req *MessageRequest) (*Message
 		}
 	}
 
+	var resp *MessageResponse
+	var err error
+
 	switch c.Provider {
 	case ProviderOpenRouter, ProviderOpenAI:
-		return c.sendOpenAICompatibleRequest(ctx, req)
+		resp, err = c.sendOpenAICompatibleRequest(ctx, req)
 	case ProviderOllama:
-		return c.sendOllamaRequest(ctx, req)
+		resp, err = c.sendOllamaRequest(ctx, req)
 	default:
-		return c.sendAnthropicRequest(ctx, req)
+		resp, err = c.sendAnthropicRequest(ctx, req)
 	}
+
+	// Record usage if we got a valid response
+	if err == nil && resp != nil {
+		store := usage.GetUsageStore()
+		tokenUsage := usage.TokenUsage{
+			InputTokens:              resp.Usage.InputTokens,
+			OutputTokens:             resp.Usage.OutputTokens,
+			CacheReadInputTokens:     resp.Usage.CacheReadInputTokens,
+			CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
+		}
+		_ = store.RecordUsage(resp.Model, tokenUsage, c.SessionID)
+	}
+
+	return resp, err
 }
 
 // sendAnthropicRequest sends a request to Anthropic API with retry logic

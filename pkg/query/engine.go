@@ -227,6 +227,7 @@ func (qe *QueryEngine) SetVerbose(verbose bool) {
 // SetSessionID sets the session ID for history tracking
 func (qe *QueryEngine) SetSessionID(sessionID string) {
 	qe.sessionID = sessionID
+	qe.client.SessionID = sessionID
 	qe.historyMgr.Init(qe.cwd, sessionID)
 }
 
@@ -698,6 +699,7 @@ func (qe *QueryEngine) StartNewSession(ctx context.Context) string {
 
 	// Generate new session ID
 	qe.sessionID = fmt.Sprintf("session-%d", time.Now().UnixMilli())
+	qe.client.SessionID = qe.sessionID
 	qe.historyMgr.Init(qe.cwd, qe.sessionID)
 	qe.initTranscript()
 
