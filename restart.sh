@@ -1,65 +1,126 @@
+
 #!/bin/bash
 
-# --- 配置区 ---
-APP_CMD="./dogclaw gateway LOG_LEVEL=debug"     # 程序 A 的启动命令
-APP_NAME="dogclaw gateway LOG_LEVEL=debug"            # 用于匹配进程的关键字
-LOG_FILE="logs/app.log"         # 日志文件
-RESTART_SIGNAL=42          # 约定的重启信号
+# DogClaw 重启脚本
+# 用于编译、启动和重启 DogClaw 服务
 
-# --- 函数：后台守护运行 ---
-do_daemon() {
-    echo "守护进程已启动..."
-    while true; do
-        $APP_CMD >> $LOG_FILE 2>&1
-        EXIT_CODE=$?
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR" || exit 1
 
-#        # 核心逻辑：如果退出码是 42，则重启
-#        if [ $EXIT_CODE -eq $RESTART_SIGNAL ]; then
-            echo "[$(date)] 收到重启信号 ($RESTART_SIGNAL)，正在重启..." >> $LOG_FILE
-            sleep 1
-#        else
-#            echo "[$(date)] 程序正常退出或崩溃 (Code: $EXIT_CODE)，停止守护。" >> $LOG_FILE
-#            break
-#        fi
-    done
+BINARY_NAME="dogclaw"
+APP_CMD="./$BINARY_NAME gateway"
+APP_NAME="$BINARY_NAME gateway"
+LOG_DIR="logs"
+LOG_FILE="$LOG_DIR/app.log"
+RESTART_SIGNAL=42
+
+mkdir -p "$LOG_DIR"
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
 }
 
-# --- 指令处理 ---
+# 编译程序
+do_build() {
+    log "正在编译 DogClaw..."
+    if make build; then
+        log "编译成功"
+        return 0
+    else
+        log "编译失败"
+        return 1
+    fi
+}
+
+# 启动程序（前台运行）
+do_start() {
+    log "启动 DogClaw..."
+    $APP_CMD >> "$LOG_FILE" 2>&1
+    return $?
+}
+
+# 检查进程是否在运行
+is_running() {
+    pgrep -f "$APP_NAME" > /dev/null 2>&1
+}
+
+# 获取进程 PID
+get_pid() {
+    pgrep -f "$APP_NAME"
+}
+
 case "$1" in
+    build)
+        do_build
+        exit $?
+        ;;
+
     start)
-        # 检查是否已经在运行
-        if pgrep -f "$APP_NAME" > /dev/null; then
-            echo "错误: $APP_NAME 已经在运行中。"
-        else
-            echo "正在启动 $APP_NAME..."
-            # 使用 nohup 在后台运行守护函数
-            #nohup bash "$0" daemon_internal >> $LOG_FILE 2>&1 &
-            do_daemon
-            echo "启动成功，日志请查看 $LOG_FILE"
+        if is_running; then
+            echo "错误: DogClaw 已经在运行中 (PID: $(get_pid))"
+            exit 1
         fi
+        
+        if [ ! -f "./$BINARY_NAME" ]; then
+            echo "二进制文件不存在，先编译..."
+            if ! do_build; then
+                exit 1
+            fi
+        fi
+        
+        do_start
+        exit $?
         ;;
 
     restart)
-        PID=$(pgrep -f "$APP_NAME")
-        #PID=$(cat ".dogclaw.pid" 2>/dev/null)
-#        if [ -z "$PID" ]; then
-#            echo "错误: 未发现正在运行的进程 $APP_NAME，尝试直接 start..."
-#            bash "$0" start
-#        else
-            make
-            echo "正在向进程 $PID 发送重启信号 ($RESTART_SIGNAL)..."
-            kill  $PID
-            echo "信号已发送。"
-#        fi
+        if ! is_running; then
+            echo "DogClaw 未运行，尝试直接启动..."
+            bash "$0" start
+            exit $?
+        fi
+        
+        PID=$(get_pid)
+        echo "正在重新编译 DogClaw..."
+        if ! do_build; then
+            echo "编译失败，保持当前进程运行"
+            exit 1
+        fi
+        
+        echo "正在向进程 $PID 发送重启信号 ($RESTART_SIGNAL)..."
+        kill -$RESTART_SIGNAL $PID
+        echo "信号已发送，服务将自动重启"
+        log "已发送重启信号给进程 $PID"
         ;;
 
-    build)
-        # 内部参数，不对外暴露，仅供 start 指令调用
-        do_daemon
+    stop)
+        if ! is_running; then
+            echo "DogClaw 未运行"
+            exit 0
+        fi
+        
+        PID=$(get_pid)
+        echo "正在停止 DogClaw (PID: $PID)..."
+        kill $PID
+        log "正在停止 DogClaw (PID: $PID)"
+        ;;
+
+    status)
+        if is_running; then
+            echo "DogClaw 正在运行 (PID: $(get_pid))"
+        else
+            echo "DogClaw 未运行"
+        fi
         ;;
 
     *)
-        echo "用法: $0 {start|restart}"
+        echo "用法: $0 {build|start|restart|stop|status}"
+        echo ""
+        echo "  build   - 编译 DogClaw"
+        echo "  start   - 启动 DogClaw（前台运行）"
+        echo "  restart - 重新编译并重启 DogClaw"
+        echo "  stop    - 停止 DogClaw"
+        echo "  status  - 查看 DogClaw 运行状态"
         exit 1
         ;;
 esac
+

@@ -1,15 +1,17 @@
+
 #!/bin/bash
 
 # DogClaw 守护进程脚本
-# 监听程序退出，若退出码为42则自动重新编译并启动
+# 监听程序退出，若退出码为42则自动重新启动
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR" || exit 1
 
 RESTART_SCRIPT="./restart.sh"
-LOG_FILE="./logs/daemon.log"
+LOG_DIR="logs"
+LOG_FILE="$LOG_DIR/daemon.log"
 
-mkdir -p logs
+mkdir -p "$LOG_DIR"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
@@ -22,7 +24,7 @@ log "守护进程启动"
 while true; do
     log "启动 DogClaw..."
     
-    # 使用 restart.sh start 启动，它会保存状态
+    # 使用 restart.sh start 启动
     "$RESTART_SCRIPT" start "$@"
     
     # 获取退出码
@@ -32,10 +34,11 @@ while true; do
     
     # 检查是否因为信号42退出
     if [ "$EXIT_CODE" -eq 42 ]; then
-        log "检测到重启信号（退出码42），准备重新编译并启动..."
+        log "检测到重启信号（退出码42），准备重新启动..."
         sleep 1
     else
         log "非重启退出，守护进程停止"
         exit "$EXIT_CODE"
     fi
 done
+
