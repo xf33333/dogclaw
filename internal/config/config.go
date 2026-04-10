@@ -47,6 +47,7 @@ func ConfigFromSettings(s *Settings) (*Config, error) {
 	cfg.Provider = active.Provider
 	cfg.Model = active.Model
 	cfg.BaseURL = active.URL
+	cfg.APIKey = active.APIKey
 	cfg.MaxTurns = s.MaxTurns
 	cfg.MaxTokens = s.MaxTokens
 	cfg.MaxContextLength = s.MaxContextLength

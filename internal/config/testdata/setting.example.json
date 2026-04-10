@@ -5,25 +5,29 @@
       "alias": "claude-sonnet",
       "provider": "openrouter",
       "model": "openrouter/anthropic/claude-sonnet-4.5",
-      "url": "https://openrouter.ai/api/v1"
+      "url": "https://openrouter.ai/api/v1",
+      "apiKey": ""
     },
     {
       "alias": "qwen-free",
       "provider": "openrouter",
       "model": "qwen/qwen3.6-plus:free",
-      "url": "https://openrouter.ai/api/v1"
+      "url": "https://openrouter.ai/api/v1",
+      "apiKey": ""
     },
     {
       "alias": "gpt4o",
       "provider": "openai",
       "model": "gpt-4o",
-      "url": "https://api.openai.com/v1"
+      "url": "https://api.openai.com/v1",
+      "apiKey": ""
     },
     {
       "alias": "claude-direct",
       "provider": "anthropic",
       "model": "claude-sonnet-4-20250514",
-      "url": "https://api.anthropic.com"
+      "url": "https://api.anthropic.com",
+      "apiKey": ""
     }
   ],
   "maxTurns": 1000,

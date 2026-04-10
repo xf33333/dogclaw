@@ -35,6 +35,7 @@ type ProviderModel struct {
 	Provider string `json:"provider"` // 提供商名称，如 anthropic, openrouter, openai
 	Model    string `json:"model"`    // 模型名称，如 claude-sonnet-4, gpt-4
 	URL      string `json:"url"`      // API 地址
+	APIKey   string `json:"apiKey"`   // API 密钥
 }
 
 // ChannelSettings holds configuration for different channels
@@ -104,6 +105,7 @@ func DefaultSettings() *Settings {
 				Provider: "openrouter",
 				Model:    "qwen/qwen3.6-plus:free",
 				URL:      "https://",
+				APIKey:   "",
 			},
 		},
 		MaxTurns:             1000,
