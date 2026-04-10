@@ -16,6 +16,7 @@ import (
 	"dogclaw/internal/config"
 	"dogclaw/pkg/channel"
 	"dogclaw/pkg/channel/cli"
+	"dogclaw/pkg/channel/gateway"
 	"dogclaw/pkg/channel/qq"
 	"dogclaw/pkg/channel/weixin"
 	"dogclaw/pkg/commands"
@@ -444,6 +445,19 @@ func runGateway(cfg *config.Config, settings *config.Settings, stopChan <-chan o
 
 	var channels []channel.Interface
 
+	// Gateway WebSocket channel
+	if settings.Channel != nil && settings.Channel.Gateway != nil && settings.Channel.Gateway.Enabled {
+		port := settings.Channel.Gateway.Port
+		if port <= 0 {
+			port = 10086 // Default port
+		}
+		ch := gateway.NewChannel(gateway.Config{
+			Port: port,
+		})
+		channels = append(channels, ch)
+		registry.Register("gateway", ch)
+	}
+
 	// QQ channel
 	if qqCfg := config.QQSettingsFromEnv(settings); qqCfg.Enabled && qqCfg.AppID != "" && qqCfg.AppSecret != "" {
 		ch := qq.NewChannel(qq.Config{
@@ -468,7 +482,7 @@ func runGateway(cfg *config.Config, settings *config.Settings, stopChan <-chan o
 	}
 
 	if len(channels) == 0 {
-		fmt.Println("⚠️  No channels configured for gateway mode. Configure at least one channel (e.g., QQ) in environment.")
+		fmt.Println("⚠️  No channels configured for gateway mode. Configure at least one channel (e.g., gateway, QQ) in settings.")
 		fmt.Println("Falling back to agent mode...")
 		runAgent(cfg, settings)
 		return

@@ -45,6 +45,15 @@ type ChannelSettings struct {
 
 	// Weixin holds the Weixin channel configuration
 	Weixin *WeixinSettings `json:"weixin,omitempty"`
+
+	// Gateway holds the gateway HTTP server configuration
+	Gateway *GatewaySettings `json:"gateway,omitempty"`
+}
+
+// GatewaySettings holds configuration for the gateway HTTP server
+type GatewaySettings struct {
+	Enabled bool   `json:"enabled"` // 是否启用 gateway HTTP 服务器
+	Port    int    `json:"port"`    // HTTP 服务器监听端口，默认 10086
 }
 
 // Settings holds user's persistent configuration stored in ~/.docclaw/setting.json
@@ -106,6 +115,12 @@ func DefaultSettings() *Settings {
 				Model:    "qwen/qwen3.6-plus:free",
 				URL:      "https://",
 				APIKey:   "",
+			},
+		},
+		Channel: &ChannelSettings{
+			Gateway: &GatewaySettings{
+				Enabled: true,
+				Port:    10086,
 			},
 		},
 		MaxTurns:             1000,
