@@ -244,7 +244,7 @@ func runAgent(cfg *config.Config, settings *config.Settings) {
 		os.Remove(restartFlagPath)
 	}
 
-	fmt.Println("🦞 DogClaw - AI Coding Assistant (Go Implementation)")
+	fmt.Println("🦞 DogClaw - AI Assistant (Go Implementation)")
 	fmt.Println("Type your message or /help for commands. Ctrl+C to exit.")
 	fmt.Println()
 
