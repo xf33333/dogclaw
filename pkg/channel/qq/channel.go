@@ -256,7 +256,7 @@ func (c *Channel) getOrCreateSession(chatID, creator string, newEngine channel.E
 	engine := newEngine("qq")
 
 	// TextCallback: fires for every LLM text block (intermediate turns with tools
-	// and the final text-only reply). 
+	// and the final text-only reply).
 	// Run in goroutine to avoid blocking the query engine loop if platform API is slow.
 	engine.TextCallback = func(text string) {
 		go sendFn(chatID, text)
@@ -266,7 +266,7 @@ func (c *Channel) getOrCreateSession(chatID, creator string, newEngine channel.E
 	engine.ToolCallCallback = func(toolName, summary string) {
 		go sendFn(chatID, fmt.Sprintf("🔧 %s", summary))
 	}
-	
+
 	// Automatically resume latest session for this context
 	engine.AutoResumeLatestSession(context.Background())
 
@@ -283,7 +283,7 @@ func (c *Channel) getOrCreateSession(chatID, creator string, newEngine channel.E
 // registered in getOrCreateSession, so this function returns "" for successful runs
 // to avoid sending a duplicate message.
 func (c *Channel) getReply(ctx context.Context, session *ChatSession, prompt string) string {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 24*time.Hour)
 	defer cancel()
 
 	err := session.Engine.SubmitMessage(ctx, prompt)
@@ -470,6 +470,7 @@ func (c *Channel) truncateMessage(content string) string {
 	}
 	return truncated
 }
+
 // Send implements channel.Sender
 func (c *Channel) Send(ctx context.Context, chatID, message string) error {
 	if message == "" {

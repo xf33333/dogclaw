@@ -277,7 +277,7 @@ func (c *WeixinChannel) getOrCreateSession(ctx context.Context, chatID string, f
 
 	engine := factory("weixin")
 	// TextCallback: fires for every LLM text block (both intermediate turns with tools
-	// and the final text-only reply). 
+	// and the final text-only reply).
 	// Run in goroutine to avoid blocking the query engine loop if platform API is slow.
 	engine.TextCallback = func(text string) {
 		go c.sendMessage(c.ctx, chatID, text)
@@ -303,7 +303,7 @@ func (c *WeixinChannel) getOrCreateSession(ctx context.Context, chatID string, f
 // function returns "" for successful runs to avoid duplicate messages.
 func (c *WeixinChannel) getReply(ctx context.Context, session *ChatSession, prompt string) string {
 	// Increase timeout to 10m to match engine heartbeat timeout
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 24*time.Hour)
 	defer cancel()
 
 	// Start Typing keep-alive in background to prevent session timeout during long turns
