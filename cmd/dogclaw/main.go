@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -37,6 +39,48 @@ const (
 	ModeGateway StartupMode = "gateway"
 	ModeOnboard StartupMode = "onboard"
 )
+
+// settingsFileExists checks if the settings.json file exists
+func settingsFileExists() bool {
+	path, err := config.GetSettingsPath()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(path)
+	return !os.IsNotExist(err)
+}
+
+// promptUserMode asks the user to choose between agent and gateway mode
+func promptUserMode() StartupMode {
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		fmt.Println("\nPlease select startup mode:")
+		fmt.Println("  1) Agent   - CLI interactive mode")
+		fmt.Println("  2) Gateway - Starts all configured channels (QQ, Weixin, etc.)")
+		fmt.Print("Enter your choice (1 or 2): ")
+
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Printf("Error reading input: %v\n", err)
+			continue
+		}
+
+		input = strings.TrimSpace(input)
+		switch input {
+		case "1", "agent", "Agent", "AGENT":
+			return ModeAgent
+		case "2", "gateway", "Gateway", "GATEWAY":
+			return ModeGateway
+		default:
+			fmt.Println("Invalid choice. Please enter 1 or 2.")
+		}
+	}
+}
+
+// isWindows returns true if running on Windows platform
+func isWindows() bool {
+	return runtime.GOOS == "windows"
+}
 
 func getRestartFlagPath() string {
 	// 获取临时目录路径
@@ -133,6 +177,8 @@ func main() {
 
 	args := remainingArgs
 
+	var startupMode StartupMode
+
 	// Parse flags (--config) and get remaining args
 	var configPath string
 	var modeArgs []string
@@ -157,16 +203,43 @@ func main() {
 	}
 
 	if len(modeArgs) == 0 {
-		fmt.Println("❌ Error: Mode is required")
-		printUsage()
-		os.Exit(1)
-	}
+		// No mode specified - check if we need interactive selection
+		// This is specially handled for Windows, but also works on other platforms
+		fmt.Println("🚀 Starting DogClaw...")
 
-	startupMode := StartupMode(modeArgs[0])
-	if startupMode != ModeAgent && startupMode != ModeGateway && startupMode != ModeOnboard {
-		fmt.Printf("❌ Error: Invalid mode '%s'. Must be 'agent', 'gateway' or 'onboard'\n", modeArgs[0])
-		printUsage()
-		os.Exit(1)
+		// Check if settings file exists
+		settingsExist := settingsFileExists()
+
+		// If no settings, run onboard first
+		if !settingsExist {
+			fmt.Println("⚠️  No configuration found. Starting onboarding process...")
+			
+			// Load/create default settings first
+			settings, err := config.LoadSettings()
+			if err != nil {
+				fmt.Printf("❌ Failed to initialize settings: %v\n", err)
+				os.Exit(1)
+			}
+			
+			// Run onboard
+			if err := commands.RunOnboard(context.Background(), settings); err != nil {
+				fmt.Printf("❌ Onboarding failed: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println()
+		}
+
+		// Let user choose mode
+		startupMode = promptUserMode()
+		fmt.Println()
+	} else {
+		// Mode specified via command line
+		startupMode = StartupMode(modeArgs[0])
+		if startupMode != ModeAgent && startupMode != ModeGateway && startupMode != ModeOnboard {
+			fmt.Printf("❌ Error: Invalid mode '%s'. Must be 'agent', 'gateway' or 'onboard'\n", modeArgs[0])
+			printUsage()
+			os.Exit(1)
+		}
 	}
 
 	// Set custom config path if specified
