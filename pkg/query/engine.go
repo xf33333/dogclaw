@@ -679,7 +679,7 @@ func (qe *QueryEngine) handleStatusCommand() string {
 	sb.WriteString(fmt.Sprintf("  • Turns: %d\n", qe.currentTurn))
 	sb.WriteString(fmt.Sprintf("  • Max Turns: %d\n", qe.maxTurns))
 	sb.WriteString(fmt.Sprintf("  • Verbose: %v\n", qe.verbose))
-	
+
 	// Show message types summary
 	var userMsgs, assistantMsgs int
 	for _, msg := range qe.messages {
@@ -692,7 +692,7 @@ func (qe *QueryEngine) handleStatusCommand() string {
 	}
 	sb.WriteString(fmt.Sprintf("  • User Messages: %d\n", userMsgs))
 	sb.WriteString(fmt.Sprintf("  • Assistant Messages: %d\n", assistantMsgs))
-	
+
 	// Show last few messages if any
 	if len(qe.messages) > 0 {
 		sb.WriteString("  • Last Messages:\n")
@@ -1174,6 +1174,22 @@ func (qe *QueryEngine) NeedsRestart() bool {
 // SetNeedsRestart sets whether the program needs to be restarted
 func (qe *QueryEngine) SetNeedsRestart(needsRestart bool) {
 	qe.needsRestart = needsRestart
+	// 检查是否需要重启
+	if qe.NeedsRestart() {
+		// 创建重启标志文件
+		if err := os.WriteFile(getRestartFlagPath(), []byte("1"), 0644); err != nil {
+			fmt.Printf("创建重启标志失败: %v\n", err)
+			return
+		}
+		// 以状态码 12 退出
+		fmt.Println("程序将在 1 秒后重启...")
+		time.Sleep(1 * time.Second)
+		os.Exit(12)
+	}
+}
+func getRestartFlagPath() string {
+	// 获取临时目录路径
+	return filepath.Join(os.TempDir(), "dogclaw_restart.flag")
 }
 
 // initTranscript initializes the transcript system for the current session.

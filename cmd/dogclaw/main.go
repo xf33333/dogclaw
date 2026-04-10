@@ -223,18 +223,6 @@ func runAgent(cfg *config.Config, settings *config.Settings) {
 			tm.Println(response)
 		}
 
-		// 检查是否需要重启
-		if qe.NeedsRestart() {
-			// 创建重启标志文件
-			if err := os.WriteFile(restartFlagPath, []byte("1"), 0644); err != nil {
-				tm.Printf("创建重启标志失败: %v\n", err)
-				return
-			}
-			// 以状态码 12 退出
-			tm.Println("程序将在 1 秒后重启...")
-			time.Sleep(1 * time.Second)
-			os.Exit(12)
-		}
 	}
 }
 
