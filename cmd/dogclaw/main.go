@@ -179,7 +179,7 @@ func runAgent(cfg *config.Config, settings *config.Settings) {
 	registry.Register("cli", cli.NewChannel())
 
 	engineFactory := newEngineFactory(cfg, settings, registry)
-	qe := engineFactory()
+	qe := engineFactory("cli")
 
 	// Try to resume the most recent session automatically
 	qe.AutoResumeLatestSession(context.Background())
@@ -261,8 +261,8 @@ func buildTools(registry *channel.Registry) []types.Tool {
 }
 
 // newEngineFactory creates a factory function for building QueryEngine instances
-func newEngineFactory(cfg *config.Config, settings *config.Settings, registry *channel.Registry) func() *query.QueryEngine {
-	return func() *query.QueryEngine {
+func newEngineFactory(cfg *config.Config, settings *config.Settings, registry *channel.Registry) func(channelName string) *query.QueryEngine {
+	return func(channelName string) *query.QueryEngine {
 		client := api.NewClient(cfg.APIKey, cfg.Model, cfg.BaseURL, cfg.Provider)
 		toolList := buildTools(registry)
 		cwd, _ := os.Getwd()
@@ -272,6 +272,8 @@ func newEngineFactory(cfg *config.Config, settings *config.Settings, registry *c
 		qe.SetVerbose(cfg.Verbose)
 		qe.SetShowToolUsageInReply(cfg.ShowToolUsageInReply)
 		qe.SetShowThinkingInLog(cfg.ShowThinkingInLog)
+		// Set channel name to isolate session history
+		qe.SetChannelName(channelName)
 		if cfg.MaxBudgetUSD > 0 {
 			qe.SetMaxBudget(cfg.MaxBudgetUSD)
 		}
