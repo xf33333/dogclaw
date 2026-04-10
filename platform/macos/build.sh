@@ -9,7 +9,7 @@ set -e
 PROJECT_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 MACOS_DIR="$PROJECT_ROOT/platform/macos"
 BUILD_DIR="$MACOS_DIR/build"
-APP_NAME="DogClawStatus.app"
+APP_NAME="DogClawUI.app"
 APP_DIR="$BUILD_DIR/$APP_NAME"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR_IN_APP="$CONTENTS_DIR/MacOS"
@@ -38,12 +38,12 @@ go build -o "$MACOS_DIR_IN_APP/dogclaw" ./cmd/dogclaw
 # 构建状态栏应用
 echo "构建状态栏应用..."
 cd "$MACOS_DIR"
-go build -o "$MACOS_DIR_IN_APP/DogClawStatus" .
+go build -o "$MACOS_DIR_IN_APP/DogClawUI" .
 
 # 设置可执行权限
 echo "设置可执行权限..."
 chmod +x "$MACOS_DIR_IN_APP/dogclaw"
-chmod +x "$MACOS_DIR_IN_APP/DogClawStatus"
+chmod +x "$MACOS_DIR_IN_APP/DogClawUI"
 
 echo "构建完成！"
 echo "应用位置: $APP_DIR"

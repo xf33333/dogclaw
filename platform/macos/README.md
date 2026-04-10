@@ -1,4 +1,4 @@
-# DogClaw macOS 状态栏应用
+# DogClaw macOS UI 应用
 
 这是一个 DogClaw 的 macOS 状态栏应用程序，可以方便地控制 gateway 模式。
 
@@ -18,17 +18,23 @@
 ./build.sh
 ```
 
-构建完成后，应用将位于 `build/DogClawStatus.app`
+构建完成后，应用将位于 `build/DogClawUI.app`
 
 ## 运行
 
 直接打开应用：
 
 ```bash
-open build/DogClawStatus.app
+open build/DogClawUI.app
 ```
 
-或者将 `DogClawStatus.app` 复制到 `/Applications` 目录以便随时使用。
+或者将 `DogClawUI.app` 复制到 `/Applications` 目录以便随时使用。
+
+## 应用内容
+
+DogClawUI.app 包含：
+- DogClawUI - 状态栏应用程序主程序
+- dogclaw - DogClaw CLI 程序（内置在应用包中）
 
 ## 使用说明
 
