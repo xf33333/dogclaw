@@ -27,6 +27,12 @@ func RunOnboard(ctx context.Context, settings *config.Settings) error {
 		fmt.Printf("⚠️  No active model found: %v\n", err)
 	} else {
 		fmt.Printf("Current Active Model: %s (%s, %s)\n", activeModel.Alias, activeModel.Provider, activeModel.Model)
+		if activeModel.APIKey != "" && len(activeModel.APIKey) > 10 {
+			keyPreview := activeModel.APIKey[:5] + "..." + activeModel.APIKey[len(activeModel.APIKey)-4:]
+			fmt.Printf("Current API Key: %s\n", keyPreview)
+		} else {
+			fmt.Println("Current API Key: Not set")
+		}
 	}
 
 	fmt.Print("Do you want to modify model settings? (y/N): ")
@@ -44,6 +50,10 @@ func RunOnboard(ctx context.Context, settings *config.Settings) error {
 		baseURL, _ := reader.ReadString('\n')
 		settings.Providers[0].URL = strings.TrimSpace(baseURL)
 
+		fmt.Print("Enter API Key: ")
+		apiKey, _ := reader.ReadString('\n')
+		settings.Providers[0].APIKey = strings.TrimSpace(apiKey)
+
 		fmt.Println("✅ Model settings updated.")
 	} else {
 		fmt.Println("Keeping current model settings.")
@@ -55,7 +65,8 @@ func RunOnboard(ctx context.Context, settings *config.Settings) error {
 	fmt.Println("Which channel would you like to configure?")
 	fmt.Println("1) QQ")
 	fmt.Println("2) Weixin (WeChat)")
-	fmt.Print("Select (1 or 2): ")
+	fmt.Println("3) Ignore (don't configure any channel)")
+	fmt.Print("Select (1, 2 or 3): ")
 	choice, _ := reader.ReadString('\n')
 	choice = strings.TrimSpace(choice)
 
@@ -82,13 +93,13 @@ func RunOnboard(ctx context.Context, settings *config.Settings) error {
 	case "2":
 		fmt.Println("\n--- Configuring Weixin Channel ---")
 		fmt.Println("Generating QR code for login...")
-		
+
 		// Trigger Weixin Login Flow
 		opts := weixin.AuthFlowOpts{
 			BotType: "3", // Default iLink Bot
 			Timeout: 5 * 10 * time.Minute,
 		}
-		
+
 		botToken, _, accountID, baseURL, err := weixin.PerformLoginInteractive(ctx, opts)
 		if err != nil {
 			return fmt.Errorf("weixin login failed: %w", err)
@@ -101,8 +112,12 @@ func RunOnboard(ctx context.Context, settings *config.Settings) error {
 		settings.Channel.Weixin.AccountID = accountID
 		settings.Channel.Weixin.BaseURL = baseURL
 		settings.Channel.Weixin.Enabled = true
-		
+
 		fmt.Println("\n✅ Weixin channel configured successfully!")
+
+	case "3":
+		fmt.Println("\n--- Skipping Channel Configuration ---")
+		fmt.Println("✅ No channels will be configured. You can configure them later by running 'dogclaw onboard'.")
 
 	default:
 		fmt.Println("Invalid choice. Skipping channel configuration.")

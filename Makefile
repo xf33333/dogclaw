@@ -1,4 +1,4 @@
-.PHONY: build clean test run lint tidy vet run-agent run-gateway help install fmt
+.PHONY: build clean test run lint tidy vet run-agent run-gateway help install fmt build-all release-all
 
 # Binary info
 BINARY_NAME=dogclaw
@@ -69,6 +69,24 @@ build-windows:
 	GOOS=windows GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe $(CMD_PATH)
 
 build-all: build-darwin build-darwin-arm64 build-linux build-linux-arm64 build-linux-armv7 build-windows
+
+# Release all platforms with version number
+release-all:
+	@if [ -z "$(VERSION)" ]; then \
+		echo "❌ Error: VERSION parameter is required. Usage: make release-all VERSION=v1.0.0"; \
+		exit 1; \
+	fi
+	@echo "🚀 Releasing version $(VERSION) for all platforms..."
+	@mkdir -p $(BUILD_DIR)/release
+	$(MAKE) build-all
+	@echo "📦 Copying and renaming binaries to release directory..."
+	@cp $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 $(BUILD_DIR)/release/$(BINARY_NAME)-$(VERSION)-darwin-amd64
+	@cp $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 $(BUILD_DIR)/release/$(BINARY_NAME)-$(VERSION)-darwin-arm64
+	@cp $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 $(BUILD_DIR)/release/$(BINARY_NAME)-$(VERSION)-linux-amd64
+	@cp $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 $(BUILD_DIR)/release/$(BINARY_NAME)-$(VERSION)-linux-arm64
+	@cp $(BUILD_DIR)/$(BINARY_NAME)-linux-armv7 $(BUILD_DIR)/release/$(BINARY_NAME)-$(VERSION)-linux-armv7
+	@cp $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe $(BUILD_DIR)/release/$(BINARY_NAME)-$(VERSION)-windows-amd64.exe
+	@echo "✅ Release $(VERSION) completed successfully! Files are in $(BUILD_DIR)/release/"
 
 # Run agent mode
 run-agent: build
@@ -148,6 +166,7 @@ help:
 	@echo "  build-linux-armv7 - Build for Linux/arm/v7 (32-bit ARM)"
 	@echo "  build-windows     - Build for Windows/amd64"
 	@echo "  build-all         - Build for all platforms"
+	@echo "  release-all       - Release all platforms with version (make release-all VERSION=v1.0.0)"
 	@echo "  run-agent         - Build and run in agent mode"
 	@echo "  run-gateway       - Build and run in gateway mode"
 	@echo "  run               - Build and run with ARGS (make run ARGS=agent)"
