@@ -283,7 +283,7 @@ func HandleUsageCommand(ctx context.Context, args string, tracker *usage.Accumul
 				sb.WriteString(fmt.Sprintf("    Cache W: %d tokens\n", modelStats.Stats.CacheCreation))
 			}
 			sb.WriteString(fmt.Sprintf("    Total:   %d tokens\n", modelStats.Stats.TotalTokens))
-			sb.WriteString(fmt.Sprintf("    Cost:    $%.4f\n", modelStats.Stats.Cost))
+			sb.WriteString(fmt.Sprintf("    Cost:    %s\n", usage.FormatCost(modelStats.Stats.Cost)))
 		}
 
 		// Show total
@@ -297,7 +297,7 @@ func HandleUsageCommand(ctx context.Context, args string, tracker *usage.Accumul
 			sb.WriteString(fmt.Sprintf("    Cache W: %d tokens\n", tr.Total.CacheCreation))
 		}
 		sb.WriteString(fmt.Sprintf("    Total:   %d tokens\n", tr.Total.TotalTokens))
-		sb.WriteString(fmt.Sprintf("    Cost:    $%.4f\n", tr.Total.Cost))
+		sb.WriteString(fmt.Sprintf("    Cost:    %s\n", usage.FormatCost(tr.Total.Cost)))
 		sb.WriteString("\n")
 	}
 

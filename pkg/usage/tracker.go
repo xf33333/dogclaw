@@ -105,7 +105,12 @@ func (a *AccumulatedUsage) CalculateCost(pricing PricingModel) float64 {
 
 // FormatCost returns formatted cost string
 func (a *AccumulatedUsage) FormatCost(pricing PricingModel) string {
-	return fmt.Sprintf("$%.4f", a.CalculateCost(pricing))
+	return FormatCost(a.CalculateCost(pricing))
+}
+
+// FormatCost formats a cost value consistently
+func FormatCost(cost float64) string {
+	return fmt.Sprintf("$%.4f", cost)
 }
 
 // CostBreakdown represents the percentage cost breakdown
