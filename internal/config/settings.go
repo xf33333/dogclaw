@@ -128,7 +128,7 @@ func DefaultSettings() *Settings {
 // LoadSettings loads settings from config file.
 // If SetConfigPath was called, it loads from that path.
 // Otherwise, it loads from ~/.dogclaw/setting.json.
-// If the file does not exist, it creates the directory and returns default settings.
+// If the file does not exist, it creates the directory, saves default settings, and returns them.
 func LoadSettings() (*Settings, error) {
 	var path string
 	var err error
@@ -144,9 +144,13 @@ func LoadSettings() (*Settings, error) {
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) && customConfigPath == "" {
-			// File doesn't exist yet and we're using the default path, return defaults
-			return DefaultSettings(), nil
+		if os.IsNotExist(err) {
+			// File doesn't exist yet, create default settings and save to file
+			defaultSettings := DefaultSettings()
+			if err := defaultSettings.SaveSettings(); err != nil {
+				return nil, fmt.Errorf("failed to save default settings: %w", err)
+			}
+			return defaultSettings, nil
 		}
 		return nil, fmt.Errorf("failed to read settings file: %w", err)
 	}
