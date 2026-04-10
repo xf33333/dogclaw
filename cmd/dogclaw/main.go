@@ -65,9 +65,41 @@ func setupSignalHandler(stopChan chan<- os.Signal) {
 		}
 	}()
 }
+
+func printUsage() {
+	fmt.Println("Usage: dogclaw [options] <mode>")
+	fmt.Println()
+	fmt.Println("Options:")
+	fmt.Println("  --config <path>, -c <path>  Path to custom configuration file")
+	fmt.Println("  --version                    Show version information")
+	fmt.Println()
+	fmt.Println("Modes:")
+	fmt.Println("  agent    CLI interactive mode for direct communication")
+	fmt.Println("  gateway  Starts all configured channels (QQ, Weixin, etc.)")
+	fmt.Println("  onboard  Interactive setup for models and channels")
+	fmt.Println()
+	fmt.Println("Examples:")
+	fmt.Println("  dogclaw agent")
+	fmt.Println("  dogclaw --config /path/to/config.json gateway")
+	fmt.Println("  dogclaw -c ./myconfig.json onboard")
+}
+
 func main() {
 	// Print version / build info
 	PrintVersion()
+	
+	// Check for help or version flags first
+	for _, arg := range os.Args[1:] {
+		if arg == "-h" || arg == "--help" || arg == "help" {
+			printUsage()
+			os.Exit(0)
+		}
+		if arg == "--version" || arg == "-v" {
+			// Version is already printed by PrintVersion()
+			os.Exit(0)
+		}
+	}
+	
 	// Ensure AGENT.md exists in ~/.dogclaw
 	if err := config.EnsureAgentMarkdownExists(); err != nil {
 		fmt.Printf("⚠️  Warning: Failed to ensure AGENT.md exists: %v\n", err)
@@ -86,11 +118,7 @@ func main() {
 				i++ // Skip the next arg which is the path
 			} else {
 				fmt.Println("❌ Error: --config requires a path argument")
-				fmt.Println("Usage: dogclaw [--config <path>] <mode>")
-				fmt.Println("Modes:")
-				fmt.Println("  agent   - CLI interactive mode for direct communication")
-				fmt.Println("  gateway - Starts all configured channels (QQ, Weixin, etc.)")
-				fmt.Println("  onboard - Interactive setup for models and channels")
+				printUsage()
 				os.Exit(1)
 			}
 		} else if strings.HasPrefix(arg, "--config=") {
@@ -104,22 +132,14 @@ func main() {
 
 	if len(modeArgs) == 0 {
 		fmt.Println("❌ Error: Mode is required")
-		fmt.Println("Usage: dogclaw [--config <path>] <mode>")
-		fmt.Println("Modes:")
-		fmt.Println("  agent   - CLI interactive mode for direct communication")
-		fmt.Println("  gateway - Starts all configured channels (QQ, Weixin, etc.)")
-		fmt.Println("  onboard - Interactive setup for models and channels")
+		printUsage()
 		os.Exit(1)
 	}
 
 	startupMode := StartupMode(modeArgs[0])
 	if startupMode != ModeAgent && startupMode != ModeGateway && startupMode != ModeOnboard {
 		fmt.Printf("❌ Error: Invalid mode '%s'. Must be 'agent', 'gateway' or 'onboard'\n", modeArgs[0])
-		fmt.Println("Usage: dogclaw [--config <path>] <mode>")
-		fmt.Println("Modes:")
-		fmt.Println("  agent   - CLI interactive mode for direct communication")
-		fmt.Println("  gateway - Starts all configured channels (QQ, Weixin, etc.)")
-		fmt.Println("  onboard - Interactive setup for models and channels")
+		printUsage()
 		os.Exit(1)
 	}
 

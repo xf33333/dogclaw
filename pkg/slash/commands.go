@@ -274,19 +274,33 @@ func RegisterBuiltinCommands(registry *CommandRegistry) {
 // HandleHelp shows available commands
 func HandleHelp(ctx context.Context, args string) (*CommandResult, error) {
 	return &CommandResult{
-		Output: `Available commands:
-  /help          - Show this help message
-  /version       - Show version information
-  /sessions      - List all local sessions
-  /resume [id]   - Resume a specific session by ID or index
-  /new           - Start a completely new session
-  /reset         - Clear the conversation history for current session (same as /clear)
-  /usage         - Show token usage and cost
-  /model <name>  - Switch model (sonnet/opus/haiku)
-  /compact       - Manually trigger context compaction
-  /verbose       - Toggle verbose mode
-  /skills        - List available skills
-  /max-turns <n> - Set maximum turns`,
+		Output: `🦞 DogClaw 命令帮助
+
+📋 基本命令:
+  /help, /h              - 显示此帮助信息
+  /version, /v           - 显示版本信息
+  /status, /stat         - 显示当前会话状态
+  /exit, /quit, /q       - 退出程序
+
+💬 会话管理:
+  /new, /n               - 开始新会话
+  /reset, /clear, /cls   - 清除当前会话历史
+  /sessions, /ls         - 列出所有会话
+  /resume [id], /r [id]  - 恢复指定会话
+
+🔧 工具命令:
+  /usage, /cost          - 显示 token 使用和费用
+  /model <name>, /m <n>  - 切换模型 (sonnet/opus/haiku)
+  /compact               - 手动触发上下文压缩
+  /verbose, /v           - 切换详细模式
+  /skills                - 列出可用技能
+  /max-turns <n>         - 设置最大对话轮数
+  /restart, /reboot      - 重启程序
+
+命令行选项 (启动时使用):
+  --config <path>, -c <path>  - 使用自定义配置文件
+  --version                    - 显示版本信息
+  --help, -h                   - 显示命令行帮助`,
 	}, nil
 }
 
