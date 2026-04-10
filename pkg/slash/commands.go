@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"dogclaw/pkg/version"
 )
 
 // CommandType represents the type of slash command
@@ -228,7 +230,7 @@ func RegisterBuiltinCommands(registry *CommandRegistry) {
 		Description: "Start a new session",
 		Type:        LocalCommand,
 		Source:      "builtin",
-		Handler:     func(ctx context.Context, args string) (*CommandResult, error) {
+		Handler: func(ctx context.Context, args string) (*CommandResult, error) {
 			return &CommandResult{Output: ""}, nil // handled in engine
 		},
 	})
@@ -258,6 +260,15 @@ func RegisterBuiltinCommands(registry *CommandRegistry) {
 		Source:      "builtin",
 		Handler:     HandleClear, // reuses clear logic but we'll add it to engine switch too
 	})
+
+	registry.Register(&Command{
+		Name:        "version",
+		Aliases:     []string{"v"},
+		Description: "Show version information",
+		Type:        LocalCommand,
+		Source:      "builtin",
+		Handler:     HandleVersion,
+	})
 }
 
 // HandleHelp shows available commands
@@ -265,6 +276,7 @@ func HandleHelp(ctx context.Context, args string) (*CommandResult, error) {
 	return &CommandResult{
 		Output: `Available commands:
   /help          - Show this help message
+  /version       - Show version information
   /sessions      - List all local sessions
   /resume [id]   - Resume a specific session by ID or index
   /new           - Start a completely new session
@@ -381,5 +393,13 @@ func HandleRestart(ctx context.Context, args string) (*CommandResult, error) {
 	// Just acknowledge - engine.handleSlashCommand will do the actual work
 	return &CommandResult{
 		Output: "", // empty output, engine will write logs
+	}, nil
+}
+
+// HandleVersion handles /version command
+func HandleVersion(ctx context.Context, args string) (*CommandResult, error) {
+	return &CommandResult{
+		Output: version.GetVersionString(),
+		Halt:   true,
 	}, nil
 }

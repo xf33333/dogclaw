@@ -34,7 +34,7 @@ GOVET=$(GOCMD) vet
 # Build flags
 BUILD_TIME=$(shell date '+%Y-%m-%d %H:%M:%S')
 GIT_COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
-LDFLAGS=-ldflags "-s -w -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.GitCommit=$(GIT_COMMIT)'"
+LDFLAGS=-ldflags "-s -w -X 'dogclaw/pkg/version.BuildTime=$(BUILD_TIME)' -X 'dogclaw/pkg/version.GitCommit=$(GIT_COMMIT)'"
 
 default: build
 
