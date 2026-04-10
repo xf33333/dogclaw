@@ -8,7 +8,7 @@ import (
 
 const AgentMdFileName = "AGENT.md"
 
-const DefaultAgentPrompt = `# AI Personal Assistant
+const DefaultAgentPrompt = `# You are DogClaw, a AI Personal Assistant
 
 ##  Role Profile
 **Role:** Professional AI Personal Assistant
