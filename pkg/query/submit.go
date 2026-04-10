@@ -1306,9 +1306,9 @@ func (qe *QueryEngine) GetLastAssistantText() string {
 // tryRecoverFromContextExceeded handles context_length_exceeded errors with a
 // tiered recovery strategy:
 //
-//	Tier 1 – aggressive snip (keep last N messages)
-//	Tier 2 – LLM-assisted compact (summarise old messages into one summary)
-//	Tier 3 – hard reset (only keep the very last user message)
+//	Tier 1 – LLM-assisted compact
+//	Tier 2 – Aggressive snip (keep last N messages)
+//	Tier 3 – Hard reset (only keep the very last user message)
 //
 // Returns (recovered=true, nil) on success, (recovered=false, err) on failure.
 func (qe *QueryEngine) tryRecoverFromContextExceeded(ctx context.Context, err error) (bool, error) {
@@ -1319,21 +1319,10 @@ func (qe *QueryEngine) tryRecoverFromContextExceeded(ctx context.Context, err er
 
 	qe.logger.Infof("[⚠️  Context length exceeded detected (HTTP %d)]", ctxErr.StatusCode)
 
-	// --- Tier 1: Aggressive snip ---
-	tier1Preserve := 4
-	if len(qe.messages) > tier1Preserve {
-		if qe.verbose {
-			qe.logger.Debugf("[🔄 Recovery Tier 1: Aggressive snip – keeping last %d messages (%d total)",
-				tier1Preserve, len(qe.messages))
-		}
-		qe.messages = qe.messages[len(qe.messages)-tier1Preserve:]
-		return true, nil
-	}
-
-	// --- Tier 2: LLM-assisted compact ---
+	// --- Tier 1: LLM-assisted compact ---
 	if qe.compactConfig.Enabled && len(qe.messages) >= 4 {
 		if qe.verbose {
-			qe.logger.Infof("[🔄 Recovery Tier 2: LLM-assisted compact with fallback preserve=2]\n")
+			qe.logger.Infof("[🔄 Recovery Tier 1: LLM-assisted compact]")
 		}
 		fallbackConfig := &compact.AutoCompactConfig{
 			Enabled:            qe.compactConfig.Enabled,
@@ -1356,6 +1345,18 @@ func (qe *QueryEngine) tryRecoverFromContextExceeded(ctx context.Context, err er
 			_ = qe.saveCompactedSession(result)
 			return true, nil
 		}
+		qe.logger.Warnf("[⚠️ Compact recovery failed: %v, falling back to Tier 2]", compactErr)
+	}
+
+	// --- Tier 2: Aggressive snip ---
+	tier2Preserve := 4
+	if len(qe.messages) > tier2Preserve {
+		if qe.verbose {
+			qe.logger.Debugf("[🔄 Recovery Tier 2: Aggressive snip – keeping last %d messages (%d total)",
+				tier2Preserve, len(qe.messages))
+		}
+		qe.messages = qe.messages[len(qe.messages)-tier2Preserve:]
+		return true, nil
 	}
 
 	// --- Tier 3: Hard reset ---
