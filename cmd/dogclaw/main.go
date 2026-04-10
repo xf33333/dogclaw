@@ -17,6 +17,7 @@ import (
 	"dogclaw/pkg/channel/qq"
 	"dogclaw/pkg/channel/weixin"
 	"dogclaw/pkg/commands"
+	"dogclaw/pkg/compact"
 	"dogclaw/pkg/query"
 	"dogclaw/pkg/skills"
 	"dogclaw/pkg/slash"
@@ -24,6 +25,7 @@ import (
 	"dogclaw/pkg/tools"
 	"dogclaw/pkg/tools/cron"
 	"dogclaw/pkg/tools/skilltool"
+	"dogclaw/pkg/transcript"
 	"dogclaw/pkg/types"
 )
 
@@ -71,6 +73,7 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Options:")
 	fmt.Println("  --config <path>, -c <path>  Path to custom configuration file")
+	fmt.Println("  --compact                    Compact the most recent session and exit")
 	fmt.Println("  --version                    Show version information")
 	fmt.Println()
 	fmt.Println("Modes:")
@@ -82,6 +85,7 @@ func printUsage() {
 	fmt.Println("  dogclaw agent")
 	fmt.Println("  dogclaw --config /path/to/config.json gateway")
 	fmt.Println("  dogclaw -c ./myconfig.json onboard")
+	fmt.Println("  dogclaw --compact")
 }
 
 func main() {
@@ -100,12 +104,34 @@ func main() {
 		}
 	}
 
+	// Check for --compact flag
+	var compactMode bool
+	var remainingArgs []string
+	for _, arg := range os.Args[1:] {
+		if arg == "--compact" {
+			compactMode = true
+		} else {
+			remainingArgs = append(remainingArgs, arg)
+		}
+	}
+
+	// If --compact mode, run compaction and exit
+	if compactMode {
+		fmt.Println("🔄 Running session compaction...")
+		if err := runCompactMode(); err != nil {
+			fmt.Printf("❌ Compaction failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("✅ Compaction completed successfully")
+		os.Exit(0)
+	}
+
 	// Ensure AGENT.md exists in ~/.dogclaw
 	if err := config.EnsureAgentMarkdownExists(); err != nil {
 		fmt.Printf("⚠️  Warning: Failed to ensure AGENT.md exists: %v\n", err)
 	}
 
-	args := os.Args[1:]
+	args := remainingArgs
 
 	// Parse flags (--config) and get remaining args
 	var configPath string
@@ -393,4 +419,128 @@ func runGateway(cfg *config.Config, settings *config.Settings, stopChan <-chan o
 		ch.Stop()
 	}
 	fmt.Println("👋 All channels stopped.")
+}
+
+// runCompactMode runs the session compaction in standalone mode
+func runCompactMode() error {
+	// Load config
+	settings, err := config.LoadSettings()
+	if err != nil {
+		return fmt.Errorf("failed to load settings: %w", err)
+	}
+
+	cfg, err := config.ConfigFromSettings(settings)
+	if err != nil {
+		return fmt.Errorf("failed to create config: %w", err)
+	}
+
+	// Get API key
+	apiKey := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
+	}
+	if apiKey == "" {
+		return fmt.Errorf("no API key found in ANTHROPIC_API_KEY or OPENROUTER_API_KEY")
+	}
+	cfg.APIKey = apiKey
+
+	// Create API client
+	client := api.NewClient(cfg.APIKey, cfg.Model, cfg.BaseURL, cfg.Provider)
+
+	// Create a minimal engine just for compaction
+	// We need to create an engine and resume the latest session
+	toolList := buildTools(nil)
+	systemPrompt := query.BuildSystemPrompt(toolList, nil, "")
+	qe := query.NewQueryEngine(client, toolList, systemPrompt, cfg.MaxTurns)
+	qe.SetVerbose(true)
+
+	// Resume the latest session
+	fmt.Println("📂 Resuming latest session...")
+	if err := qe.AutoResumeLatestSession(context.Background()); err != nil {
+		return fmt.Errorf("failed to resume session: %w", err)
+	}
+
+	// Check current token count
+	messages := qe.GetMessages()
+	tokenCount := compact.EstimateMessagesTokenCount(messages)
+	fmt.Printf("📊 Current session: %d messages, ~%d tokens\n", len(messages), tokenCount)
+
+	// Force compaction (disable threshold check temporarily)
+	// We'll temporarily lower the threshold to force compaction
+	compactConfig := compact.DefaultAutoCompactConfig()
+	compactConfig.ThresholdRatio = 0.0 // Force compaction even if under threshold
+
+	fmt.Println("🔨 Compacting session...")
+	result, err := compact.CompactMessages(context.Background(), client, messages, systemPrompt, compactConfig)
+	if err != nil {
+		return fmt.Errorf("compaction failed: %w", err)
+	}
+
+	if result == nil {
+		fmt.Println("ℹ️  No compaction needed (not enough messages)")
+		return nil
+	}
+
+	fmt.Printf("✅ Compaction complete:\n")
+	fmt.Printf("   - Messages: %d -> %d\n", result.OriginalMessageCount, result.CompactedMessageCount)
+	fmt.Printf("   - Tokens: %d -> %d\n", result.PreCompactTokenCount, result.PostCompactTokenCount)
+
+	// Apply the compaction result
+	compactedMessages := compact.ApplyCompactResult(messages, result)
+
+	// Now we need to save these compacted messages back to the transcript
+	// Use the transcript package directly
+
+	// First, find the latest session
+	pm, err := transcript.NewProjectManager("")
+	if err != nil {
+		return fmt.Errorf("failed to create transcript manager: %w", err)
+	}
+
+	sessions, err := pm.ListSessions()
+	if err != nil {
+		return fmt.Errorf("failed to list sessions: %w", err)
+	}
+
+	if len(sessions) == 0 {
+		return fmt.Errorf("no sessions found")
+	}
+
+	// Find the most recent session by checking file modification times
+	var latestSession transcript.SessionInfo
+	var latestModTime int64
+	for _, s := range sessions {
+		info, err := os.Stat(s.FilePath)
+		if err != nil {
+			continue
+		}
+		modTime := info.ModTime().UnixMilli()
+		if latestSession.SessionID == "" || modTime > latestModTime {
+			latestSession = s
+			latestModTime = modTime
+		}
+	}
+
+	if latestSession.SessionID == "" {
+		return fmt.Errorf("no valid sessions found")
+	}
+
+	fmt.Printf("💾 Saving compacted session: %s\n", latestSession.SessionID)
+
+	// Get the transcript file
+	tf := pm.GetTranscriptFile(latestSession.SessionID, latestSession.ProjectPath)
+
+	// Serialize and save the compacted session
+	compactedData, err := compact.SerializeCompactedSession(result, compactedMessages)
+	if err != nil {
+		return fmt.Errorf("failed to serialize compacted session: %w", err)
+	}
+
+	if err := tf.WriteMetadata(string(transcript.MetadataCompaction), compactedData); err != nil {
+		return fmt.Errorf("failed to save compacted session: %w", err)
+	}
+
+	fmt.Println("✅ Compacted session saved successfully")
+
+	return nil
 }

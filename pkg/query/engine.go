@@ -474,6 +474,50 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 			}
 		}
 
+	case "compact":
+		_, args := slash.ParseCommand(input)
+		args = strings.TrimSpace(args)
+		if args == "" {
+			// 手动触发压缩
+			result, err := compact.CompactMessages(ctx, qe.client, qe.messages, qe.systemPrompt, qe.compactConfig)
+			if err != nil {
+				qe.lastAssistantText = fmt.Sprintf("Compaction failed: %v", err)
+				qe.logger.Errorf("Compaction failed: %v", err)
+			} else if result != nil {
+				qe.messages = compact.ApplyCompactResult(qe.messages, result)
+				qe.compactTracker.Compacted = true
+				qe.compactTracker.TurnCounter++
+				msg := fmt.Sprintf("✅ Compaction complete: %d -> %d messages, %d -> %d tokens",
+					result.OriginalMessageCount, result.CompactedMessageCount,
+					result.PreCompactTokenCount, result.PostCompactTokenCount)
+				qe.lastAssistantText = msg
+				qe.logger.Info(msg)
+				// 保存压缩后的会话到元数据
+				_ = qe.saveCompactedSession(result)
+			} else {
+				qe.lastAssistantText = "No compaction needed (not enough messages or under threshold)"
+				qe.logger.Info("No compaction needed")
+			}
+		} else {
+			switch strings.ToLower(args) {
+			case "on", "enable":
+				qe.compactConfig.Enabled = true
+				qe.lastAssistantText = "Auto-compact enabled"
+				qe.logger.Info("Auto-compact enabled")
+			case "off", "disable":
+				qe.compactConfig.Enabled = false
+				qe.lastAssistantText = "Auto-compact disabled"
+				qe.logger.Info("Auto-compact disabled")
+			case "status":
+				tokenCount := compact.EstimateMessagesTokenCount(qe.messages)
+				threshold := int(float64(qe.compactConfig.ModelContextWindow) * qe.compactConfig.ThresholdRatio)
+				msg := fmt.Sprintf("Auto-compact: enabled=%v, tokens=%d, threshold=%d, compacted=%v",
+					qe.compactConfig.Enabled, tokenCount, threshold, qe.compactTracker.Compacted)
+				qe.lastAssistantText = msg
+				qe.logger.Infof(msg)
+			}
+		}
+
 	case "sessions":
 		_, args := slash.ParseCommand(input)
 		args = strings.TrimSpace(args)
