@@ -12,6 +12,7 @@ type Config struct {
 	BaseURL              string
 	MaxTurns             int
 	MaxTokens            int
+	MaxContextLength     int
 	MaxBudgetUSD         float64
 	PermissionMode       types.PermissionMode
 	Verbose              bool
@@ -24,12 +25,13 @@ type Config struct {
 func DefaultConfig() *Config {
 	return &Config{
 		//Model:          "openrouter/anthropic/claude-sonnet-4.5",
-		Model:          "qwen/qwen3.6-plus:free",
-		BaseURL:        "https://",
-		MaxTurns:       1000,
-		MaxTokens:      8192,
-		PermissionMode: types.PermissionModeDefault,
-		Cwd:            ".",
+		Model:            "qwen/qwen3.6-plus:free",
+		BaseURL:          "https://",
+		MaxTurns:         1000,
+		MaxTokens:        8192,
+		MaxContextLength: 200000,
+		PermissionMode:   types.PermissionModeDefault,
+		Cwd:              ".",
 	}
 }
 
@@ -47,6 +49,7 @@ func ConfigFromSettings(s *Settings) (*Config, error) {
 	cfg.BaseURL = active.URL
 	cfg.MaxTurns = s.MaxTurns
 	cfg.MaxTokens = s.MaxTokens
+	cfg.MaxContextLength = s.MaxContextLength
 	cfg.MaxBudgetUSD = s.MaxBudgetUSD
 	cfg.PermissionMode = types.PermissionMode(s.PermissionMode)
 	cfg.Verbose = s.Verbose

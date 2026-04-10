@@ -936,6 +936,16 @@ func (qe *QueryEngine) SetMaxTokens(tokens int) {
 	}
 }
 
+// SetMaxContextLength sets the model context window for compaction
+func (qe *QueryEngine) SetMaxContextLength(length int) {
+	if length <= 0 {
+		return
+	}
+	qe.compactConfig.ModelContextWindow = length
+	// Also update MaxContextTokens to something slightly less than the window (95% safety buffer)
+	qe.compactConfig.MaxContextTokens = int(float64(length) * 0.95)
+}
+
 // SetHeartbeatEnabled sets whether the heartbeat mechanism is enabled
 func (qe *QueryEngine) SetHeartbeatEnabled(enabled bool) {
 	qe.heartbeatMu.Lock()

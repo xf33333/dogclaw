@@ -321,6 +321,9 @@ func newEngineFactory(cfg *config.Config, settings *config.Settings, registry *c
 		if cfg.MaxTokens > 0 {
 			qe.SetMaxTokens(cfg.MaxTokens)
 		}
+		if cfg.MaxContextLength > 0 {
+			qe.SetMaxContextLength(cfg.MaxContextLength)
+		}
 		// Apply heartbeat configuration from settings
 		qe.SetHeartbeatEnabled(settings.EnableHeartbeat)
 		qe.SetHeartbeatInterval(time.Duration(settings.HeartbeatPeriod) * time.Minute)
