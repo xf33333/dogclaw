@@ -189,13 +189,16 @@ func main() {
 		cfg = config.DefaultConfig()
 	}
 
-	// Get API key from environment (supports both ANTHROPIC_API_KEY and OPENROUTER_API_KEY)
-	apiKey := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
+	// Get API key: prioritize from settings, fallback to environment variables
+	apiKey := strings.TrimSpace(cfg.APIKey)
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
+	}
 	if apiKey == "" {
 		apiKey = strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
 	}
 	if apiKey == "" {
-		fmt.Println("⚠️  Warning: No API key found in ANTHROPIC_API_KEY or OPENROUTER_API_KEY")
+		fmt.Println("⚠️  Warning: No API key found in settings or environment (ANTHROPIC_API_KEY / OPENROUTER_API_KEY)")
 		return
 	}
 	cfg.APIKey = apiKey
@@ -434,13 +437,16 @@ func runCompactMode() error {
 		return fmt.Errorf("failed to create config: %w", err)
 	}
 
-	// Get API key
-	apiKey := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
+	// Get API key: prioritize from settings, fallback to environment variables
+	apiKey := strings.TrimSpace(cfg.APIKey)
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
+	}
 	if apiKey == "" {
 		apiKey = strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
 	}
 	if apiKey == "" {
-		return fmt.Errorf("no API key found in ANTHROPIC_API_KEY or OPENROUTER_API_KEY")
+		return fmt.Errorf("no API key found in settings or environment (ANTHROPIC_API_KEY / OPENROUTER_API_KEY)")
 	}
 	cfg.APIKey = apiKey
 
