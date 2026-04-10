@@ -113,6 +113,20 @@ func FormatCost(cost float64) string {
 	return fmt.Sprintf("$%.4f", cost)
 }
 
+// FormatTokens formats a token count with K/M/B suffixes
+func FormatTokens(tokens int) string {
+	switch {
+	case tokens >= 1_000_000_000:
+		return fmt.Sprintf("%.2fB", float64(tokens)/1_000_000_000.0)
+	case tokens >= 1_000_000:
+		return fmt.Sprintf("%.2fM", float64(tokens)/1_000_000.0)
+	case tokens >= 1_000:
+		return fmt.Sprintf("%.2fK", float64(tokens)/1_000.0)
+	default:
+		return fmt.Sprintf("%d", tokens)
+	}
+}
+
 // CostBreakdown represents the percentage cost breakdown
 type CostBreakdown struct {
 	InputPercentage         float64

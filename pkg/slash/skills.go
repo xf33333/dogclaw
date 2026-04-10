@@ -274,29 +274,29 @@ func HandleUsageCommand(ctx context.Context, args string, tracker *usage.Accumul
 				continue
 			}
 			sb.WriteString(fmt.Sprintf("  Model: %s\n", modelStats.Model))
-			sb.WriteString(fmt.Sprintf("    Input:   %d tokens\n", modelStats.Stats.InputTokens))
-			sb.WriteString(fmt.Sprintf("    Output:  %d tokens\n", modelStats.Stats.OutputTokens))
+			sb.WriteString(fmt.Sprintf("    Input:   %s tokens\n", usage.FormatTokens(modelStats.Stats.InputTokens)))
+			sb.WriteString(fmt.Sprintf("    Output:  %s tokens\n", usage.FormatTokens(modelStats.Stats.OutputTokens)))
 			if modelStats.Stats.CacheRead > 0 {
-				sb.WriteString(fmt.Sprintf("    Cache R: %d tokens\n", modelStats.Stats.CacheRead))
+				sb.WriteString(fmt.Sprintf("    Cache R: %s tokens\n", usage.FormatTokens(modelStats.Stats.CacheRead)))
 			}
 			if modelStats.Stats.CacheCreation > 0 {
-				sb.WriteString(fmt.Sprintf("    Cache W: %d tokens\n", modelStats.Stats.CacheCreation))
+				sb.WriteString(fmt.Sprintf("    Cache W: %s tokens\n", usage.FormatTokens(modelStats.Stats.CacheCreation)))
 			}
-			sb.WriteString(fmt.Sprintf("    Total:   %d tokens\n", modelStats.Stats.TotalTokens))
+			sb.WriteString(fmt.Sprintf("    Total:   %s tokens\n", usage.FormatTokens(modelStats.Stats.TotalTokens)))
 			sb.WriteString(fmt.Sprintf("    Cost:    %s\n", usage.FormatCost(modelStats.Stats.Cost)))
 		}
 
 		// Show total
 		sb.WriteString(fmt.Sprintf("  Total for %s:\n", tr.Label))
-		sb.WriteString(fmt.Sprintf("    Input:   %d tokens\n", tr.Total.InputTokens))
-		sb.WriteString(fmt.Sprintf("    Output:  %d tokens\n", tr.Total.OutputTokens))
+		sb.WriteString(fmt.Sprintf("    Input:   %s tokens\n", usage.FormatTokens(tr.Total.InputTokens)))
+		sb.WriteString(fmt.Sprintf("    Output:  %s tokens\n", usage.FormatTokens(tr.Total.OutputTokens)))
 		if tr.Total.CacheRead > 0 {
-			sb.WriteString(fmt.Sprintf("    Cache R: %d tokens\n", tr.Total.CacheRead))
+			sb.WriteString(fmt.Sprintf("    Cache R: %s tokens\n", usage.FormatTokens(tr.Total.CacheRead)))
 		}
 		if tr.Total.CacheCreation > 0 {
-			sb.WriteString(fmt.Sprintf("    Cache W: %d tokens\n", tr.Total.CacheCreation))
+			sb.WriteString(fmt.Sprintf("    Cache W: %s tokens\n", usage.FormatTokens(tr.Total.CacheCreation)))
 		}
-		sb.WriteString(fmt.Sprintf("    Total:   %d tokens\n", tr.Total.TotalTokens))
+		sb.WriteString(fmt.Sprintf("    Total:   %s tokens\n", usage.FormatTokens(tr.Total.TotalTokens)))
 		sb.WriteString(fmt.Sprintf("    Cost:    %s\n", usage.FormatCost(tr.Total.Cost)))
 		sb.WriteString("\n")
 	}
@@ -305,15 +305,15 @@ func HandleUsageCommand(ctx context.Context, args string, tracker *usage.Accumul
 	if tracker != nil && tracker.TotalTokens() > 0 {
 		pricing := usage.GetPricingForModel("sonnet")
 		sb.WriteString("--- Current Session ---\n")
-		sb.WriteString(fmt.Sprintf("  Input tokens:     %d\n", tracker.TotalInput))
-		sb.WriteString(fmt.Sprintf("  Output tokens:    %d\n", tracker.TotalOutput))
+		sb.WriteString(fmt.Sprintf("  Input tokens:     %s\n", usage.FormatTokens(tracker.TotalInput)))
+		sb.WriteString(fmt.Sprintf("  Output tokens:    %s\n", usage.FormatTokens(tracker.TotalOutput)))
 		if tracker.TotalCacheRead > 0 {
-			sb.WriteString(fmt.Sprintf("  Cache read:       %d\n", tracker.TotalCacheRead))
+			sb.WriteString(fmt.Sprintf("  Cache read:       %s\n", usage.FormatTokens(tracker.TotalCacheRead)))
 		}
 		if tracker.TotalCacheCreation > 0 {
-			sb.WriteString(fmt.Sprintf("  Cache creation:   %d\n", tracker.TotalCacheCreation))
+			sb.WriteString(fmt.Sprintf("  Cache creation:   %s\n", usage.FormatTokens(tracker.TotalCacheCreation)))
 		}
-		sb.WriteString(fmt.Sprintf("  Total tokens:     %d\n", tracker.TotalTokens()))
+		sb.WriteString(fmt.Sprintf("  Total tokens:     %s\n", usage.FormatTokens(tracker.TotalTokens())))
 		sb.WriteString(fmt.Sprintf("  Turns:            %d\n", tracker.Turns))
 		sb.WriteString(fmt.Sprintf("  Estimated cost:   %s\n", tracker.FormatCost(pricing)))
 	}
