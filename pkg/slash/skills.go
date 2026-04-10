@@ -269,6 +269,10 @@ func HandleUsageCommand(ctx context.Context, args string, tracker *usage.Accumul
 
 		// Show per-model stats
 		for _, modelStats := range tr.Models {
+			// Skip empty model names
+			if modelStats.Model == "" {
+				continue
+			}
 			sb.WriteString(fmt.Sprintf("  Model: %s\n", modelStats.Model))
 			sb.WriteString(fmt.Sprintf("    Input:   %d tokens\n", modelStats.Stats.InputTokens))
 			sb.WriteString(fmt.Sprintf("    Output:  %d tokens\n", modelStats.Stats.OutputTokens))

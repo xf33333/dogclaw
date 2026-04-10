@@ -178,6 +178,11 @@ func AggregateStats(records []UsageRecord) map[string]*UsageStats {
 	modelStats := make(map[string]*UsageStats)
 
 	for _, r := range records {
+		// Skip records with empty model
+		if r.Model == "" {
+			continue
+		}
+		
 		stats, ok := modelStats[r.Model]
 		if !ok {
 			stats = &UsageStats{}
