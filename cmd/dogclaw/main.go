@@ -197,11 +197,11 @@ func main() {
 	if apiKey == "" {
 		apiKey = strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
 	}
-	if apiKey == "" {
-		fmt.Println("⚠️  Warning: No API key found in settings or environment (ANTHROPIC_API_KEY / OPENROUTER_API_KEY)")
-		return
-	}
-	cfg.APIKey = apiKey
+	//if apiKey == "" {
+	fmt.Println("⚠️  Warning: No API key found in settings or environment (ANTHROPIC_API_KEY / OPENROUTER_API_KEY)")
+	//	return
+	//}
+	//cfg.APIKey = apiKey
 
 	// Debug: Print provider and key status
 	provider := settings.ActiveAlias
