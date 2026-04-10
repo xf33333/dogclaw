@@ -27,6 +27,8 @@
     }
   ],
   "maxTurns": 1000,
+  "maxTokens": 8192,
+  "maxContextLength": 200000,
   "maxBudgetUSD": 0,
   "permissionMode": "default",
   "verbose": false,

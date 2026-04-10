@@ -64,7 +64,8 @@ type Settings struct {
 
 	// Other parameters
 	MaxTurns             int     `json:"maxTurns"`
-	MaxTokens            int     `json:"maxTokens"` // 单次响应最大 token 数
+	MaxTokens            int     `json:"maxTokens"`            // 单次响应最大 token 数
+	MaxContextLength     int     `json:"maxContextLength"`     // 最大上下文长度（对话历史总 token 数）
 	MaxBudgetUSD         float64 `json:"maxBudgetUSD"`
 	PermissionMode       string  `json:"permissionMode"`
 	Verbose              bool    `json:"verbose"`
@@ -107,6 +108,7 @@ func DefaultSettings() *Settings {
 		},
 		MaxTurns:             1000,
 		MaxTokens:            8192,
+		MaxContextLength:     200000, // 默认最大上下文长度 200K tokens
 		MaxBudgetUSD:         0,
 		PermissionMode:       "default",
 		Verbose:              false,
@@ -158,6 +160,9 @@ func LoadSettings() (*Settings, error) {
 	}
 	if settings.MaxTokens <= 0 {
 		settings.MaxTokens = DefaultSettings().MaxTokens
+	}
+	if settings.MaxContextLength <= 0 {
+		settings.MaxContextLength = DefaultSettings().MaxContextLength
 	}
 
 	return &settings, nil
