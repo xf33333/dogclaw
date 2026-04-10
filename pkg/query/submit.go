@@ -653,10 +653,10 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 				// fire the callback so channels receive it even inside multi-turn loops.
 				if qe.TextCallback != nil {
 					qe.TextCallback(qe.lastAssistantText)
-				} else {
-					// LLM returned no text at all (e.g. only thinking blocks)
-					qe.lastAssistantText = "（模型未返回文字内容）"
 				}
+			} else {
+				// LLM returned no text at all (e.g. only thinking blocks)
+				qe.lastAssistantText = "（模型未返回文字内容）"
 			}
 
 			if qe.verbose {
