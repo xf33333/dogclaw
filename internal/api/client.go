@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -846,6 +847,10 @@ func (c *Client) doOpenAIRequest(ctx context.Context, endpoint string, body []by
 			if isContextLengthExceededError(string(respBody), "openai") {
 				return nil, &ContextLengthExceededError{StatusCode: resp.StatusCode, Body: string(respBody), Provider: c.Provider}
 			}
+			// Check for invalid max_tokens
+			if maxAllowed, ok := isInvalidMaxTokensError(openAIError.Error.Message); ok {
+				return nil, &InvalidMaxTokensError{StatusCode: resp.StatusCode, MaxAllowed: maxAllowed, Body: string(respBody)}
+			}
 			return nil, fmt.Errorf("API error: %s - %s", resp.Status, openAIError.Error.Message)
 		}
 		return nil, fmt.Errorf("API error: %s - %s", resp.Status, string(respBody))
@@ -1314,6 +1319,17 @@ func (e *ContextLengthExceededError) Error() string {
 	return fmt.Sprintf("context length exceeded (HTTP %d): %s", e.StatusCode, e.Body)
 }
 
+// InvalidMaxTokensError represents a 400 error where max_tokens exceeds model limit.
+type InvalidMaxTokensError struct {
+	StatusCode int
+	MaxAllowed int
+	Body       string
+}
+
+func (e *InvalidMaxTokensError) Error() string {
+	return fmt.Sprintf("invalid max_tokens (HTTP %d): limit is %d, body: %s", e.StatusCode, e.MaxAllowed, e.Body)
+}
+
 // ContextDeadlineExceededError represents a request timeout (HTTP client deadline exceeded).
 // This occurs when the server doesn't respond within the specified timeout,
 // NOT when the prompt is too long. It's potentially retryable.
@@ -1510,4 +1526,19 @@ func parseRetryAfter(resp *http.Response) time.Duration {
 
 	// Default fallback
 	return baseDelay
+}
+
+// isInvalidMaxTokensError detects if the error message indicates an invalid max_tokens parameter
+// and returns the extracted maximum allowed value if found.
+func isInvalidMaxTokensError(message string) (int, bool) {
+	// Pattern: "expected a value <= 32768"
+	re := regexp.MustCompile(`expected a value <=\s*(\d+)`)
+	matches := re.FindStringSubmatch(message)
+	if len(matches) > 1 {
+		val, err := strconv.Atoi(matches[1])
+		if err == nil {
+			return val, true
+		}
+	}
+	return 0, false
 }

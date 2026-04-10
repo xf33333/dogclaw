@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"dogclaw/internal/api"
+	"dogclaw/internal/config"
 	"dogclaw/internal/logger"
 	"dogclaw/pkg/claudemd"
 	"dogclaw/pkg/compact"
@@ -505,6 +506,14 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 			if recoveryErr != nil {
 				return recoveryErr
 			}
+			// Try to recover from invalid max_tokens errors
+			recoveredToken, recoveryTokenErr := qe.tryRecoverFromInvalidMaxTokens(ctx, err)
+			if recoveredToken {
+				continue // Retry with adjusted maxTokens
+			}
+			if recoveryTokenErr != nil {
+				return recoveryTokenErr
+			}
 			return fmt.Errorf("API error: %w", err)
 		}
 
@@ -921,6 +930,14 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 			}
 			if recoveryErr != nil {
 				return recoveryErr
+			}
+			// Try to recover from invalid max_tokens errors
+			recoveredToken, recoveryTokenErr := qe.tryRecoverFromInvalidMaxTokens(ctx, err)
+			if recoveredToken {
+				continue // Retry with adjusted maxTokens
+			}
+			if recoveryTokenErr != nil {
+				return recoveryTokenErr
 			}
 			return fmt.Errorf("API error: %w", err)
 		}
@@ -1374,6 +1391,37 @@ func (qe *QueryEngine) tryRecoverFromContextExceeded(ctx context.Context, err er
 		qe.messages = make([]api.MessageParam, 0)
 	}
 	// Hard reset succeeded, return recovered=true to let caller retry
+	return true, nil
+}
+
+// tryRecoverFromInvalidMaxTokens handles incorrect max_tokens settings by
+// automatically adjusting to the model's supported limit and persisting the change.
+func (qe *QueryEngine) tryRecoverFromInvalidMaxTokens(ctx context.Context, err error) (bool, error) {
+	var invalidErr *api.InvalidMaxTokensError
+	if !errors.As(err, &invalidErr) {
+		return false, nil
+	}
+
+	qe.logger.Infof("[🔄 Invalid max_tokens detected (%d), adjusting to model limit: %d]", qe.maxTokens, invalidErr.MaxAllowed)
+
+	// 1. Update runtime state
+	qe.SetMaxTokens(invalidErr.MaxAllowed)
+
+	// 2. Persist to settings.json
+	settings, loadErr := config.LoadSettings()
+	if loadErr != nil {
+		qe.logger.Warnf("[⚠️ Failed to load settings for persistence: %v]", loadErr)
+		// We still return true because we adjusted the runtime state and can retry
+		return true, nil
+	}
+
+	settings.MaxTokens = invalidErr.MaxAllowed
+	if saveErr := settings.SaveSettings(); saveErr != nil {
+		qe.logger.Warnf("[⚠️ Failed to save adjusted max_tokens to settings: %v]", saveErr)
+	} else {
+		qe.logger.Infof("[🏠 Corrected max_tokens saved to settings.json]")
+	}
+
 	return true, nil
 }
 
