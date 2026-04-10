@@ -675,6 +675,7 @@ func (qe *QueryEngine) handleStatusCommand() string {
 	sb.WriteString("📊 Session Status:\n")
 	sb.WriteString(fmt.Sprintf("  • Session ID: %s\n", qe.sessionID))
 	sb.WriteString(fmt.Sprintf("  • Model: %s\n", qe.modelName))
+	sb.WriteString(fmt.Sprintf("  • Config File: %s\n", config.GetConfigPath()))
 	sb.WriteString(fmt.Sprintf("  • Messages: %d\n", len(qe.messages)))
 	sb.WriteString(fmt.Sprintf("  • Turns: %d\n", qe.currentTurn))
 	sb.WriteString(fmt.Sprintf("  • Max Turns: %d\n", qe.maxTurns))
@@ -682,6 +683,7 @@ func (qe *QueryEngine) handleStatusCommand() string {
 
 	// Show message types summary
 	var userMsgs, assistantMsgs int
+	var totalTokens int
 	for _, msg := range qe.messages {
 		switch msg.Role {
 		case "user":
@@ -689,9 +691,45 @@ func (qe *QueryEngine) handleStatusCommand() string {
 		case "assistant":
 			assistantMsgs++
 		}
+		// Calculate tokens for each message
+		switch v := msg.Content.(type) {
+		case string:
+			totalTokens += compact.EstimateTokenCount(v)
+		case []api.ContentBlockParam:
+			for _, block := range v {
+				if block.Type == "text" {
+					totalTokens += compact.EstimateTokenCount(block.Text)
+				} else if block.Type == "tool_use" {
+					data, _ := json.Marshal(block.Input)
+					totalTokens += compact.EstimateTokenCount(string(data))
+				} else if block.Type == "tool_result" {
+					if blocks, ok := block.Content.([]api.ContentBlockParam); ok {
+						for _, sub := range blocks {
+							if sub.Type == "text" {
+								totalTokens += compact.EstimateTokenCount(sub.Text)
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 	sb.WriteString(fmt.Sprintf("  • User Messages: %d\n", userMsgs))
 	sb.WriteString(fmt.Sprintf("  • Assistant Messages: %d\n", assistantMsgs))
+	sb.WriteString(fmt.Sprintf("  • Estimated Tokens: %d\n", totalTokens))
+
+	// Show context window usage
+	contextWindow := qe.compactConfig.ModelContextWindow
+	if contextWindow > 0 {
+		usagePercent := float64(totalTokens) / float64(contextWindow) * 100
+		sb.WriteString(fmt.Sprintf("  • Context Window: %d / %d (%.1f%%)\n", totalTokens, contextWindow, usagePercent))
+	}
+
+	// Show compaction status
+	sb.WriteString(fmt.Sprintf("  • Compaction Done: %v\n", qe.compactTracker.Compacted))
+	if qe.compactTracker.Compacted {
+		sb.WriteString(fmt.Sprintf("  • Compaction Turn Counter: %d\n", qe.compactTracker.TurnCounter))
+	}
 
 	// Show last few messages if any
 	if len(qe.messages) > 0 {

@@ -75,9 +75,36 @@ func main() {
 
 	args := os.Args[1:]
 
-	if len(args) == 0 {
+	// Parse flags (--config) and get remaining args
+	var configPath string
+	var modeArgs []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--config" || arg == "-c" {
+			if i+1 < len(args) {
+				configPath = args[i+1]
+				i++ // Skip the next arg which is the path
+			} else {
+				fmt.Println("❌ Error: --config requires a path argument")
+				fmt.Println("Usage: dogclaw [--config <path>] <mode>")
+				fmt.Println("Modes:")
+				fmt.Println("  agent   - CLI interactive mode for direct communication")
+				fmt.Println("  gateway - Starts all configured channels (QQ, Weixin, etc.)")
+				fmt.Println("  onboard - Interactive setup for models and channels")
+				os.Exit(1)
+			}
+		} else if strings.HasPrefix(arg, "--config=") {
+			configPath = strings.TrimPrefix(arg, "--config=")
+		} else if strings.HasPrefix(arg, "-c=") {
+			configPath = strings.TrimPrefix(arg, "-c=")
+		} else {
+			modeArgs = append(modeArgs, arg)
+		}
+	}
+
+	if len(modeArgs) == 0 {
 		fmt.Println("❌ Error: Mode is required")
-		fmt.Println("Usage: dogclaw <mode>")
+		fmt.Println("Usage: dogclaw [--config <path>] <mode>")
 		fmt.Println("Modes:")
 		fmt.Println("  agent   - CLI interactive mode for direct communication")
 		fmt.Println("  gateway - Starts all configured channels (QQ, Weixin, etc.)")
@@ -85,10 +112,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	startupMode := StartupMode(args[0])
+	startupMode := StartupMode(modeArgs[0])
 	if startupMode != ModeAgent && startupMode != ModeGateway && startupMode != ModeOnboard {
-		fmt.Printf("❌ Error: Invalid mode '%s'. Must be 'agent', 'gateway' or 'onboard'\n", args[0])
-		fmt.Println("Usage: dogclaw <mode>")
+		fmt.Printf("❌ Error: Invalid mode '%s'. Must be 'agent', 'gateway' or 'onboard'\n", modeArgs[0])
+		fmt.Println("Usage: dogclaw [--config <path>] <mode>")
 		fmt.Println("Modes:")
 		fmt.Println("  agent   - CLI interactive mode for direct communication")
 		fmt.Println("  gateway - Starts all configured channels (QQ, Weixin, etc.)")
@@ -96,7 +123,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Load persistent settings from ~/.docclaw/setting.json
+	// Set custom config path if specified
+	if configPath != "" {
+		config.SetConfigPath(configPath)
+		fmt.Printf("📁 Using config file: %s\n", configPath)
+	}
+
+	// Load persistent settings
 	settings, err := config.LoadSettings()
 	if err != nil {
 		fmt.Printf("⚠️  Failed to load settings, using defaults: %v\n", err)

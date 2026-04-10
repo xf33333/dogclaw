@@ -12,6 +12,23 @@ const (
 	settingsFileName = "setting.json"
 )
 
+// customConfigPath holds the path to a custom config file, if specified
+var customConfigPath string
+
+// SetConfigPath sets a custom path for the configuration file
+func SetConfigPath(path string) {
+	customConfigPath = path
+}
+
+// GetConfigPath returns the current configuration file path
+func GetConfigPath() string {
+	if customConfigPath != "" {
+		return customConfigPath
+	}
+	path, _ := GetSettingsPath()
+	return path
+}
+
 // ProviderModel represents a configured model with its provider, URL and alias
 type ProviderModel struct {
 	Alias    string `json:"alias"`    // 别名，用于快速引用
@@ -104,18 +121,27 @@ func DefaultSettings() *Settings {
 	}
 }
 
-// LoadSettings loads settings from ~/.docclaw/setting.json.
+// LoadSettings loads settings from config file.
+// If SetConfigPath was called, it loads from that path.
+// Otherwise, it loads from ~/.dogclaw/setting.json.
 // If the file does not exist, it creates the directory and returns default settings.
 func LoadSettings() (*Settings, error) {
-	path, err := GetSettingsPath()
-	if err != nil {
-		return nil, err
+	var path string
+	var err error
+
+	if customConfigPath != "" {
+		path = customConfigPath
+	} else {
+		path, err = GetSettingsPath()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			// File doesn't exist yet, return defaults
+		if os.IsNotExist(err) && customConfigPath == "" {
+			// File doesn't exist yet and we're using the default path, return defaults
 			return DefaultSettings(), nil
 		}
 		return nil, fmt.Errorf("failed to read settings file: %w", err)
@@ -137,11 +163,21 @@ func LoadSettings() (*Settings, error) {
 	return &settings, nil
 }
 
-// SaveSettings persists the settings to ~/.docclaw/setting.json
+// SaveSettings persists the settings to the config file
 func (s *Settings) SaveSettings() error {
-	dir, err := GetSettingsDir()
-	if err != nil {
-		return err
+	var dir string
+	var path string
+	var err error
+
+	if customConfigPath != "" {
+		path = customConfigPath
+		dir = filepath.Dir(path)
+	} else {
+		dir, err = GetSettingsDir()
+		if err != nil {
+			return err
+		}
+		path = filepath.Join(dir, settingsFileName)
 	}
 
 	// Create directory if it doesn't exist
@@ -149,7 +185,6 @@ func (s *Settings) SaveSettings() error {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
-	path := filepath.Join(dir, settingsFileName)
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal settings: %w", err)
