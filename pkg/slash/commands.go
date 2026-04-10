@@ -269,6 +269,15 @@ func RegisterBuiltinCommands(registry *CommandRegistry) {
 		Source:      "builtin",
 		Handler:     HandleVersion,
 	})
+
+	registry.Register(&Command{
+		Name:        "shell",
+		Aliases:     []string{"sh"},
+		Description: "Execute a shell command",
+		Type:        LocalCommand,
+		Source:      "builtin",
+		Handler:     HandleShell,
+	})
 }
 
 // HandleHelp shows available commands
@@ -296,6 +305,7 @@ func HandleHelp(ctx context.Context, args string) (*CommandResult, error) {
   /skills                - 列出可用技能
   /max-turns <n>         - 设置最大对话轮数
   /restart, /reboot      - 重启程序
+  /shell <command>, /sh  - 执行 shell 命令
 
 命令行选项 (启动时使用):
   --config <path>, -c <path>  - 使用自定义配置文件
@@ -415,5 +425,13 @@ func HandleVersion(ctx context.Context, args string) (*CommandResult, error) {
 	return &CommandResult{
 		Output: version.GetVersionString(),
 		Halt:   true,
+	}, nil
+}
+
+// HandleShell handles /shell command - actual logic in engine.handleShellCommand
+func HandleShell(ctx context.Context, args string) (*CommandResult, error) {
+	// Just acknowledge - engine.handleSlashCommand will do the actual work
+	return &CommandResult{
+		Output: "", // empty output, engine will write logs
 	}, nil
 }

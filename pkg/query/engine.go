@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -554,6 +555,30 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 		msg := "重启命令已收到，程序即将重启..."
 		qe.lastAssistantText = msg
 		qe.logger.Info(msg)
+
+	case "shell", "sh":
+		_, args := slash.ParseCommand(input)
+		if args == "" {
+			msg := "Usage: /shell <command> 或 /sh <command>\n例如: /shell pwd"
+			qe.lastAssistantText = msg
+			qe.logger.Info(msg)
+		} else {
+			// 执行 shell 命令
+			cmd := exec.CommandContext(ctx, "bash", "-c", args)
+			cmd.Dir = qe.cwd
+			output, err := cmd.CombinedOutput()
+			outputStr := strings.TrimSpace(string(output))
+			
+			var result string
+			if err != nil {
+				result = fmt.Sprintf("**Shell**\n\ncommand: `%s`\n\noutput:\n%s\n\nerror: %v", args, outputStr, err)
+			} else {
+				result = fmt.Sprintf("**Shell**\n\ncommand: `%s`\n\noutput:\n%s", args, outputStr)
+			}
+			
+			qe.lastAssistantText = result
+			qe.logger.Info(result)
+		}
 
 	default:
 		qe.logger.Info(result.Output)
