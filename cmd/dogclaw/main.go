@@ -44,7 +44,7 @@ func getRestartFlagPath() string {
 func setupSignalHandler(stopChan chan<- os.Signal) {
 	// 监听信号
 	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGUSR2, syscall.SIGINT)
+	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 
 	fmt.Printf("进程已启动，PID: %d\n", os.Getpid())
 
@@ -53,8 +53,8 @@ func setupSignalHandler(stopChan chan<- os.Signal) {
 		sig := <-sigs
 		fmt.Printf("\n收到信号: %v\n", sig)
 
-		// 如果是 SIGUSR2 信号，以状态码 12 退出
-		if sig == syscall.SIGUSR2 {
+		// 如果是 SIGHUP 信号，以状态码 12 退出（用于重启）
+		if sig == syscall.SIGHUP {
 			os.Exit(12)
 		}
 		// 其他信号传递给 stopChan
@@ -87,7 +87,7 @@ func printUsage() {
 func main() {
 	// Print version / build info
 	PrintVersion()
-	
+
 	// Check for help or version flags first
 	for _, arg := range os.Args[1:] {
 		if arg == "-h" || arg == "--help" || arg == "help" {
@@ -99,7 +99,7 @@ func main() {
 			os.Exit(0)
 		}
 	}
-	
+
 	// Ensure AGENT.md exists in ~/.dogclaw
 	if err := config.EnsureAgentMarkdownExists(); err != nil {
 		fmt.Printf("⚠️  Warning: Failed to ensure AGENT.md exists: %v\n", err)
@@ -192,7 +192,7 @@ func main() {
 		fmt.Println("🤖 Starting in AGENT mode (CLI communication)...")
 		runAgent(cfg, settings)
 	case ModeGateway:
-		stopChan := make(chan os.Signal, 1)
+		stopChan := make(chan os.Signal, 12)
 		setupSignalHandler(stopChan)
 		fmt.Println("🌐 Starting in GATEWAY mode (channel communication)...")
 		runGateway(cfg, settings, stopChan)
@@ -383,8 +383,8 @@ func runGateway(cfg *config.Config, settings *config.Settings, stopChan <-chan o
 	}
 
 	// Handle shutdown signals
-	sig := <-stopChan
-	fmt.Printf("\n📥 Received %v, shutting down...\n", sig)
+	sig, e := <-stopChan
+	fmt.Printf("\n📥 Received %v, shutting down... err %v\n", sig, e)
 	cancel()
 	for _, ch := range channels {
 		ch.Stop()
