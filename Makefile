@@ -64,7 +64,11 @@ build-linux-armv7:
 	@echo "🔨 Building for linux/arm/v7 (32-bit ARM)..."
 	GOOS=linux GOARCH=arm GOARM=7 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-linux-armv7 $(CMD_PATH)
 
-build-all: build-darwin build-darwin-arm64 build-linux build-linux-arm64 build-linux-armv7
+build-windows:
+	@echo "🔨 Building for windows/amd64..."
+	GOOS=windows GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe $(CMD_PATH)
+
+build-all: build-darwin build-darwin-arm64 build-linux build-linux-arm64 build-linux-armv7 build-windows
 
 # Run agent mode
 run-agent: build
@@ -142,6 +146,7 @@ help:
 	@echo "  build-linux       - Build for Linux/amd64"
 	@echo "  build-linux-arm64 - Build for Linux/arm64"
 	@echo "  build-linux-armv7 - Build for Linux/arm/v7 (32-bit ARM)"
+	@echo "  build-windows     - Build for Windows/amd64"
 	@echo "  build-all         - Build for all platforms"
 	@echo "  run-agent         - Build and run in agent mode"
 	@echo "  run-gateway       - Build and run in gateway mode"

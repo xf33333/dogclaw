@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"os"
-	"syscall"
 
 	"dogclaw/pkg/types"
 )
@@ -38,20 +37,10 @@ func (t *RestartGatewayTool) Call(ctx context.Context, input map[string]any, too
 		})
 	}
 
-	// 向自己发送 SIGUSR2 信号让 daemon 重启
-	pid := os.Getpid()
-	process, err := os.FindProcess(pid)
+	// 发送重启信号（跨平台实现）
+	err := signalRestartProcess()
 	if err != nil {
-		return &types.ToolResult{
-			Data:    "Failed to find current process",
-			IsError: true,
-		}, nil
-	}
-
-	// 使用 SIGUSR2 来触发重启（之前约定的信号）
-	err = process.Signal(syscall.SIGUSR2)
-	if err != nil {
-		// 如果 SIGUSR2 失败，尝试直接退出
+		// 如果信号发送失败，尝试直接退出
 		go func() {
 			os.Exit(0)
 		}()
