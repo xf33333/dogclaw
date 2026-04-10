@@ -170,26 +170,72 @@ func CompactMessages(
 	systemPrompt string,
 	config *AutoCompactConfig,
 ) (*CompactResult, error) {
-	if len(messages) < 4 {
+	return compactMessagesInternal(ctx, client, messages, systemPrompt, config, false)
+}
+
+// ForceCompactMessages forces compaction regardless of message count or token threshold
+// Used for manual compaction requests
+func ForceCompactMessages(
+	ctx context.Context,
+	client *api.Client,
+	messages []api.MessageParam,
+	systemPrompt string,
+	config *AutoCompactConfig,
+) (*CompactResult, error) {
+	return compactMessagesInternal(ctx, client, messages, systemPrompt, config, true)
+}
+
+// compactMessagesInternal is the internal implementation that supports both normal and forced compaction
+func compactMessagesInternal(
+	ctx context.Context,
+	client *api.Client,
+	messages []api.MessageParam,
+	systemPrompt string,
+	config *AutoCompactConfig,
+	force bool,
+) (*CompactResult, error) {
+	if !force && len(messages) < 4 {
 		return nil, nil // Too few messages to compact
 	}
 
 	tokenCount := EstimateMessagesTokenCount(messages)
 	threshold := int(float64(config.ModelContextWindow) * config.ThresholdRatio)
 
-	if tokenCount < threshold {
+	if !force && tokenCount < threshold {
 		return nil, nil // Under threshold, no compaction needed
+	}
+
+	// For forced compaction, if there are fewer than 2 messages, we can't compact
+	if force && len(messages) < 2 {
+		return nil, fmt.Errorf("need at least 2 messages to perform forced compaction")
 	}
 
 	// Determine split point: preserve recent messages, compact older ones
 	// Keep last 3-4 messages (recent context), compact everything before
 	preserveCount := 4
+	if force {
+		// For forced compaction, preserve fewer messages to compact more
+		preserveCount = 2
+	}
 	if len(messages) <= preserveCount {
-		return nil, nil // Not enough messages to preserve
+		if force {
+			// For forced compaction with very few messages, just compact everything
+			preserveCount = 0
+		} else {
+			return nil, nil // Not enough messages to preserve
+		}
 	}
 
-	messagesToCompact := messages[:len(messages)-preserveCount]
-	messagesToPreserve := messages[len(messages)-preserveCount:]
+	var messagesToCompact []api.MessageParam
+	var messagesToPreserve []api.MessageParam
+	
+	if preserveCount == 0 {
+		messagesToCompact = messages
+		messagesToPreserve = []api.MessageParam{}
+	} else {
+		messagesToCompact = messages[:len(messages)-preserveCount]
+		messagesToPreserve = messages[len(messages)-preserveCount:]
+	}
 
 	// Build compact request
 	compactPrompt := buildCompactPrompt(messagesToCompact)

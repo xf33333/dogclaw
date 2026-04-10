@@ -478,8 +478,8 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 		_, args := slash.ParseCommand(input)
 		args = strings.TrimSpace(args)
 		if args == "" {
-			// 手动触发压缩
-			result, err := compact.CompactMessages(ctx, qe.client, qe.messages, qe.systemPrompt, qe.compactConfig)
+			// 手动触发压缩 - 使用强制压缩
+			result, err := compact.ForceCompactMessages(ctx, qe.client, qe.messages, qe.systemPrompt, qe.compactConfig)
 			if err != nil {
 				qe.lastAssistantText = fmt.Sprintf("Compaction failed: %v", err)
 				qe.logger.Errorf("Compaction failed: %v", err)
