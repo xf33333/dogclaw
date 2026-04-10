@@ -11,15 +11,20 @@ type TokenUsage struct {
 	OutputTokens             int `json:"output_tokens"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	// Reasoning tokens from extended thinking
+	ReasoningInputTokens  int `json:"reasoning_input_tokens,omitempty"`
+	ReasoningOutputTokens int `json:"reasoning_output_tokens,omitempty"`
 }
 
 // AccumulatedUsage tracks total usage across multiple turns
 type AccumulatedUsage struct {
-	TotalInput         int
-	TotalOutput        int
-	TotalCacheRead     int
-	TotalCacheCreation int
-	Turns              int
+	TotalInput          int
+	TotalOutput         int
+	TotalCacheRead      int
+	TotalCacheCreation  int
+	TotalReasoningInput int
+	TotalReasoningOutput int
+	Turns               int
 }
 
 // Add accumulates usage from a single response
@@ -28,29 +33,35 @@ func (a *AccumulatedUsage) Add(u TokenUsage) {
 	a.TotalOutput += u.OutputTokens
 	a.TotalCacheRead += u.CacheReadInputTokens
 	a.TotalCacheCreation += u.CacheCreationInputTokens
+	a.TotalReasoningInput += u.ReasoningInputTokens
+	a.TotalReasoningOutput += u.ReasoningOutputTokens
 	a.Turns++
 }
 
 // TotalTokens returns the sum of all tokens
 func (a *AccumulatedUsage) TotalTokens() int {
-	return a.TotalInput + a.TotalOutput + a.TotalCacheRead + a.TotalCacheCreation
+	return a.TotalInput + a.TotalOutput + a.TotalCacheRead + a.TotalCacheCreation + a.TotalReasoningInput + a.TotalReasoningOutput
 }
 
 // PricingModel defines cost per 1M tokens
 type PricingModel struct {
-	InputPrice      float64
-	OutputPrice     float64
-	CacheReadPrice  float64
-	CacheWritePrice float64
+	InputPrice         float64
+	OutputPrice        float64
+	CacheReadPrice     float64
+	CacheWritePrice    float64
+	ReasoningInputPrice  float64
+	ReasoningOutputPrice float64
 }
 
 // DefaultPricing returns default pricing (Claude 3.5 Sonnet rates as fallback)
 func DefaultPricing() PricingModel {
 	return PricingModel{
-		InputPrice:      3.00,  // $3.00 / 1M tokens
-		OutputPrice:     15.00, // $15.00 / 1M tokens
-		CacheReadPrice:  0.30,  // $0.30 / 1M tokens
-		CacheWritePrice: 3.75,  // $3.75 / 1M tokens
+		InputPrice:           3.00,  // $3.00 / 1M tokens
+		OutputPrice:          15.00, // $15.00 / 1M tokens
+		CacheReadPrice:       0.30,  // $0.30 / 1M tokens
+		CacheWritePrice:      3.75,  // $3.75 / 1M tokens
+		ReasoningInputPrice:  3.00,  // $3.00 / 1M tokens (同输入)
+		ReasoningOutputPrice: 15.00, // $15.00 / 1M tokens (同输出)
 	}
 }
 
@@ -60,10 +71,12 @@ var ModelPricingMap = map[string]PricingModel{
 	"opus": {
 		InputPrice: 15.00, OutputPrice: 75.00,
 		CacheReadPrice: 1.50, CacheWritePrice: 18.75,
+		ReasoningInputPrice: 15.00, ReasoningOutputPrice: 75.00,
 	},
 	"haiku": {
 		InputPrice: 0.80, OutputPrice: 4.00,
 		CacheReadPrice: 0.08, CacheWritePrice: 1.00,
+		ReasoningInputPrice: 0.80, ReasoningOutputPrice: 4.00,
 	},
 }
 
@@ -85,10 +98,46 @@ func (a *AccumulatedUsage) CalculateCost(pricing PricingModel) float64 {
 	cost += float64(a.TotalOutput) / 1_000_000.0 * pricing.OutputPrice
 	cost += float64(a.TotalCacheRead) / 1_000_000.0 * pricing.CacheReadPrice
 	cost += float64(a.TotalCacheCreation) / 1_000_000.0 * pricing.CacheWritePrice
+	cost += float64(a.TotalReasoningInput) / 1_000_000.0 * pricing.ReasoningInputPrice
+	cost += float64(a.TotalReasoningOutput) / 1_000_000.0 * pricing.ReasoningOutputPrice
 	return cost
 }
 
 // FormatCost returns formatted cost string
 func (a *AccumulatedUsage) FormatCost(pricing PricingModel) string {
 	return fmt.Sprintf("$%.4f", a.CalculateCost(pricing))
+}
+
+// CostBreakdown represents the percentage cost breakdown
+type CostBreakdown struct {
+	InputPercentage         float64
+	OutputPercentage        float64
+	CacheReadPercentage     float64
+	CacheWritePercentage    float64
+	ReasoningInputPercentage  float64
+	ReasoningOutputPercentage float64
+}
+
+// GetCostBreakdown returns the cost breakdown in percentages
+func (a *AccumulatedUsage) GetCostBreakdown(pricing PricingModel) CostBreakdown {
+	totalCost := a.CalculateCost(pricing)
+	if totalCost <= 0 {
+		return CostBreakdown{}
+	}
+
+	inputCost := float64(a.TotalInput) / 1_000_000.0 * pricing.InputPrice
+	outputCost := float64(a.TotalOutput) / 1_000_000.0 * pricing.OutputPrice
+	cacheReadCost := float64(a.TotalCacheRead) / 1_000_000.0 * pricing.CacheReadPrice
+	cacheWriteCost := float64(a.TotalCacheCreation) / 1_000_000.0 * pricing.CacheWritePrice
+	reasoningInputCost := float64(a.TotalReasoningInput) / 1_000_000.0 * pricing.ReasoningInputPrice
+	reasoningOutputCost := float64(a.TotalReasoningOutput) / 1_000_000.0 * pricing.ReasoningOutputPrice
+
+	return CostBreakdown{
+		InputPercentage:         (inputCost / totalCost) * 100,
+		OutputPercentage:        (outputCost / totalCost) * 100,
+		CacheReadPercentage:     (cacheReadCost / totalCost) * 100,
+		CacheWritePercentage:    (cacheWriteCost / totalCost) * 100,
+		ReasoningInputPercentage:  (reasoningInputCost / totalCost) * 100,
+		ReasoningOutputPercentage: (reasoningOutputCost / totalCost) * 100,
+	}
 }

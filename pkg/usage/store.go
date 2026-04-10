@@ -11,23 +11,28 @@ import (
 
 // UsageRecord represents a single usage record
 type UsageRecord struct {
-	Timestamp     int64  `json:"timestamp"`
-	Model         string `json:"model"`
-	InputTokens   int    `json:"input_tokens"`
-	OutputTokens  int    `json:"output_tokens"`
-	CacheRead     int    `json:"cache_read,omitempty"`
-	CacheCreation int    `json:"cache_creation,omitempty"`
-	SessionID     string `json:"session_id,omitempty"`
+	Timestamp          int64  `json:"timestamp"`
+	Model              string `json:"model"`
+	InputTokens        int    `json:"input_tokens"`
+	OutputTokens       int    `json:"output_tokens"`
+	CacheRead          int    `json:"cache_read,omitempty"`
+	CacheCreation      int    `json:"cache_creation,omitempty"`
+	ReasoningInput     int    `json:"reasoning_input,omitempty"`
+	ReasoningOutput    int    `json:"reasoning_output,omitempty"`
+	SessionID          string `json:"session_id,omitempty"`
 }
 
 // UsageStats represents aggregated usage statistics
 type UsageStats struct {
-	InputTokens   int     `json:"input_tokens"`
-	OutputTokens  int     `json:"output_tokens"`
-	CacheRead     int     `json:"cache_read"`
-	CacheCreation int     `json:"cache_creation"`
-	TotalTokens   int     `json:"total_tokens"`
-	Cost          float64 `json:"cost"`
+	InputTokens        int     `json:"input_tokens"`
+	OutputTokens       int     `json:"output_tokens"`
+	CacheRead          int     `json:"cache_read"`
+	CacheCreation      int     `json:"cache_creation"`
+	ReasoningInput     int     `json:"reasoning_input"`
+	ReasoningOutput    int     `json:"reasoning_output"`
+	TotalTokens        int     `json:"total_tokens"`
+	CallCount          int     `json:"call_count"`
+	Cost               float64 `json:"cost"`
 }
 
 // ModelUsageStats represents usage statistics per model
@@ -97,13 +102,15 @@ func (s *UsageStore) RecordUsage(model string, usage TokenUsage, sessionID strin
 
 	now := time.Now()
 	record := UsageRecord{
-		Timestamp:     now.UnixMilli(),
-		Model:         model,
-		InputTokens:   usage.InputTokens,
-		OutputTokens:  usage.OutputTokens,
-		CacheRead:     usage.CacheReadInputTokens,
-		CacheCreation: usage.CacheCreationInputTokens,
-		SessionID:     sessionID,
+		Timestamp:          now.UnixMilli(),
+		Model:              model,
+		InputTokens:        usage.InputTokens,
+		OutputTokens:       usage.OutputTokens,
+		CacheRead:          usage.CacheReadInputTokens,
+		CacheCreation:      usage.CacheCreationInputTokens,
+		ReasoningInput:     usage.ReasoningInputTokens,
+		ReasoningOutput:    usage.ReasoningOutputTokens,
+		SessionID:          sessionID,
 	}
 
 	filePath := s.getFilePath(now)
@@ -181,6 +188,9 @@ func AggregateStats(records []UsageRecord) map[string]*UsageStats {
 		stats.OutputTokens += r.OutputTokens
 		stats.CacheRead += r.CacheRead
 		stats.CacheCreation += r.CacheCreation
+		stats.ReasoningInput += r.ReasoningInput
+		stats.ReasoningOutput += r.ReasoningOutput
+		stats.CallCount++
 	}
 
 	// Calculate total tokens and cost for each model
@@ -193,6 +203,8 @@ func AggregateStats(records []UsageRecord) map[string]*UsageStats {
 			TotalOutput:        stats.OutputTokens,
 			TotalCacheRead:     stats.CacheRead,
 			TotalCacheCreation: stats.CacheCreation,
+			TotalReasoningInput: stats.ReasoningInput,
+			TotalReasoningOutput: stats.ReasoningOutput,
 		}
 		stats.Cost = acc.CalculateCost(pricing)
 	}
@@ -261,6 +273,9 @@ func (s *UsageStore) GetTimeRangeStats() ([]TimeRangeStats, error) {
 			totalStats.OutputTokens += stats.OutputTokens
 			totalStats.CacheRead += stats.CacheRead
 			totalStats.CacheCreation += stats.CacheCreation
+			totalStats.ReasoningInput += stats.ReasoningInput
+			totalStats.ReasoningOutput += stats.ReasoningOutput
+			totalStats.CallCount += stats.CallCount
 			totalStats.TotalTokens += stats.TotalTokens
 			totalStats.Cost += stats.Cost
 		}
