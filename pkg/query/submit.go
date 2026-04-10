@@ -1157,10 +1157,10 @@ func (qe *QueryEngine) buildFullSystemPrompt() (string, *api.MemorySummary) {
 		parts = append(parts, qe.systemPrompt)
 	}
 
-	skillsSection := qe.skillRegistry.FormatSkillsForPrompt()
-	if skillsSection != "" {
-		parts = append(parts, skillsSection)
-	}
+	//skillsSection := qe.skillRegistry.FormatSkillsForPrompt()
+	//if skillsSection != "" {
+	//	parts = append(parts, skillsSection)
+	//}
 
 	memoryFiles, err := claudemd.GetMemoryFiles(qe.cwd)
 	if err == nil {

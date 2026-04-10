@@ -58,11 +58,11 @@ func GetMemoryFiles(cwd string) ([]MemoryFileInfo, error) {
 	// 2. User memory (~/.dogclaw/AGENT.md)
 	homeDir, err := os.UserHomeDir()
 	if err == nil {
-		userPath := filepath.Join(homeDir, ".dogclaw", "AGENT.md")
-		files, err = processMemoryFile(userPath, User, processedPaths, 0, "")
-		if err == nil {
-			result = append(result, files...)
-		}
+		//userPath := filepath.Join(homeDir, ".dogclaw", "AGENT.md")
+		//files, err = processMemoryFile(userPath, User, processedPaths, 0, "")
+		//if err == nil {
+		//	result = append(result, files...)
+		//}
 
 		// User rules (~/.dogclaw/rules/*.md)
 		userRulesDir := filepath.Join(homeDir, ".dogclaw", "rules")
@@ -91,13 +91,15 @@ func GetMemoryFiles(cwd string) ([]MemoryFileInfo, error) {
 	// Process from root downward (root has lowest priority, loaded first)
 	for i := len(dirs) - 1; i >= 0; i-- {
 		dir := dirs[i]
-
-		// Project: AGENT.md
-		projectPath := filepath.Join(dir, "AGENT.md")
-		files, err = processMemoryFile(projectPath, Project, processedPaths, 0, "")
-		if err == nil {
-			result = append(result, files...)
+		if strings.EqualFold(dir, homeDir) {
+			continue
 		}
+		//// Project: AGENT.md
+		//projectPath := filepath.Join(dir, "AGENT.md")
+		//files, err = processMemoryFile(projectPath, Project, processedPaths, 0, "")
+		//if err == nil {
+		//	result = append(result, files...)
+		//}
 
 		// Project: .dogclaw/AGENT.md
 		dogclawPath := filepath.Join(dir, ".dogclaw", "AGENT.md")
