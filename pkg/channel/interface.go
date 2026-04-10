@@ -10,7 +10,8 @@ import (
 )
 
 // EngineFactory creates a new QueryEngine for channel sessions
-type EngineFactory func() *query.QueryEngine
+// channelName is the name of the channel (e.g. "qq", "weixin", "cli") to isolate sessions
+type EngineFactory func(channelName string) *query.QueryEngine
 
 // Info holds metadata about a channel instance
 type Info struct {

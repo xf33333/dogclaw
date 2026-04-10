@@ -253,7 +253,7 @@ func (c *Channel) getOrCreateSession(chatID, creator string, newEngine channel.E
 		return v.(*ChatSession)
 	}
 
-	engine := newEngine()
+	engine := newEngine("qq")
 
 	// TextCallback: fires for every LLM text block (intermediate turns with tools
 	// and the final text-only reply). 

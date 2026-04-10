@@ -47,6 +47,7 @@ type QueryEngine struct {
 	snipConfig     *compact.SnipConfig
 	cwd            string
 	sessionID      string
+	channelName    string // 用于区分不同 channel 的会话（例如 "qq", "weixin", "cli"）
 	historyMgr     *history.HistoryManager
 
 	// Slash command support
@@ -230,6 +231,17 @@ func (qe *QueryEngine) SetSessionID(sessionID string) {
 	qe.sessionID = sessionID
 	qe.client.SessionID = sessionID
 	qe.historyMgr.Init(qe.cwd, sessionID)
+}
+
+// SetChannelName sets the channel name for session isolation
+// Different channels will have their own independent session spaces
+func (qe *QueryEngine) SetChannelName(channelName string) {
+	qe.channelName = channelName
+}
+
+// GetChannelName returns the current channel name
+func (qe *QueryEngine) GetChannelName() string {
+	return qe.channelName
 }
 
 // GetMessages returns the current message list
@@ -732,6 +744,7 @@ func (qe *QueryEngine) handleStatusCommand() string {
 
 // AutoResumeLatestSession automatically resumes the most recent session if one exists.
 // It excludes cron-created sessions (session IDs starting with "cronsession-").
+// If a channel name is set, it will only resume sessions belonging to that channel.
 func (qe *QueryEngine) AutoResumeLatestSession(ctx context.Context) error {
 	sessions, err := qe.listSessionsWithSummary(qe.cwd)
 	if err != nil || len(sessions) == 0 {
@@ -749,15 +762,40 @@ func (qe *QueryEngine) AutoResumeLatestSession(ctx context.Context) error {
 			}
 			continue
 		}
+
+		// If channel name is set, only consider sessions matching this channel
+		if qe.channelName != "" {
+			expectedPrefix := qe.channelName + "-session-"
+			if !strings.HasPrefix(session.SessionID, expectedPrefix) {
+				if qe.verbose {
+					qe.logger.Debugf("[Resume] Skipping non-%s session: %s", qe.channelName, session.SessionID)
+				}
+				continue
+			}
+		} else {
+			// If no channel name is set, skip sessions that have channel prefixes
+			// (only resume generic "session-" sessions)
+			if strings.Contains(session.SessionID, "-session-") && !strings.HasPrefix(session.SessionID, "session-") {
+				if qe.verbose {
+					qe.logger.Debugf("[Resume] Skipping channel-specific session (no channel set): %s", session.SessionID)
+				}
+				continue
+			}
+		}
+
 		latestNonCronSession = &session
 		break
 	}
 
 	if latestNonCronSession == nil {
 		if qe.verbose {
-			qe.logger.Debug("[Resume] No non-cron sessions found, skipping auto-resume")
+			if qe.channelName != "" {
+				qe.logger.Debugf("[Resume] No %s non-cron sessions found, skipping auto-resume", qe.channelName)
+			} else {
+				qe.logger.Debug("[Resume] No generic non-cron sessions found, skipping auto-resume")
+			}
 		}
-		return nil // No non-cron sessions to resume
+		return nil // No suitable sessions to resume
 	}
 
 	sessionID := latestNonCronSession.SessionID
@@ -782,8 +820,12 @@ func (qe *QueryEngine) StartNewSession(ctx context.Context) string {
 	// Close current transcript file
 	qe.transcriptFile = nil
 
-	// Generate new session ID
-	qe.sessionID = fmt.Sprintf("session-%d", time.Now().UnixMilli())
+	// Generate new session ID with channel prefix if set
+	if qe.channelName != "" {
+		qe.sessionID = fmt.Sprintf("%s-session-%d", qe.channelName, time.Now().UnixMilli())
+	} else {
+		qe.sessionID = fmt.Sprintf("session-%d", time.Now().UnixMilli())
+	}
 	qe.client.SessionID = qe.sessionID
 	qe.historyMgr.Init(qe.cwd, qe.sessionID)
 	qe.initTranscript()
@@ -1151,7 +1193,12 @@ func (qe *QueryEngine) initTranscript() {
 		qe.transcriptProjectMgr = pm
 	}
 	if qe.sessionID == "" {
-		qe.sessionID = fmt.Sprintf("session-%d", time.Now().UnixMilli())
+		// Generate session ID with channel prefix if set
+		if qe.channelName != "" {
+			qe.sessionID = fmt.Sprintf("%s-session-%d", qe.channelName, time.Now().UnixMilli())
+		} else {
+			qe.sessionID = fmt.Sprintf("session-%d", time.Now().UnixMilli())
+		}
 	}
 	qe.transcriptFile = qe.transcriptProjectMgr.GetTranscriptFile(qe.sessionID, qe.cwd)
 	if qe.verbose {

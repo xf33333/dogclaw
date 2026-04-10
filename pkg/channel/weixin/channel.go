@@ -275,7 +275,7 @@ func (c *WeixinChannel) getOrCreateSession(ctx context.Context, chatID string, f
 		return v.(*ChatSession)
 	}
 
-	engine := factory()
+	engine := factory("weixin")
 	// TextCallback: fires for every LLM text block (both intermediate turns with tools
 	// and the final text-only reply). 
 	// Run in goroutine to avoid blocking the query engine loop if platform API is slow.

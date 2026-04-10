@@ -15,10 +15,10 @@ import (
 
 // Executor runs cron jobs
 type Executor struct {
-	engineFactory func() *query.QueryEngine
+	engineFactory func(channelName string) *query.QueryEngine
 }
 
-func NewExecutor(factory func() *query.QueryEngine) *Executor {
+func NewExecutor(factory func(channelName string) *query.QueryEngine) *Executor {
 	return &Executor{
 		engineFactory: factory,
 	}
@@ -32,7 +32,7 @@ func (e *Executor) RunJob(ctx context.Context, job CronJob) {
 	cronLogger.Infof("Starting cron job: %s (Schedule: %s)", job.Description, job.Schedule)
 	
 	// 2. Create QueryEngine and configure it
-	qe := e.engineFactory()
+	qe := e.engineFactory("cron")
 	qe.SetLogger(cronLogger)
 	
 	// Use a unique session ID for this run

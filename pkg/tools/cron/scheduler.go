@@ -13,10 +13,10 @@ import (
 // Scheduler manages background cron job checking
 type Scheduler struct {
 	executor      *Executor
-	engineFactory func() *query.QueryEngine
+	engineFactory func(channelName string) *query.QueryEngine
 }
 
-func NewScheduler(factory func() *query.QueryEngine) *Scheduler {
+func NewScheduler(factory func(channelName string) *query.QueryEngine) *Scheduler {
 	return &Scheduler{
 		executor:      NewExecutor(factory),
 		engineFactory: factory,

@@ -29,19 +29,15 @@ func TestCronConfig(t *testing.T) {
 }
 
 func TestLoadConfig_FileNotExist(t *testing.T) {
-	// 测试配置文件不存在的情况，使用临时目录避免干扰
-	tempDir := t.TempDir()
-	tempConfigPath := filepath.Join(tempDir, "cron.json")
+	// 先清理配置文件，确保测试环境干净
+	dir, err := GetSettingsDir()
+	if err != nil {
+		t.Fatalf("Failed to get settings dir: %v", err)
+	}
+	configPath := filepath.Join(dir, configFileName)
+	_ = os.Remove(configPath)
 
-	// 在临时目录中没有配置文件，直接调用 LoadConfig
-	// 由于 LoadConfig 使用固定路径，我们需要临时重定向或使用其他方法
-	// 这里我们采用更简单的方式：测试 LoadConfig 对不存在的处理逻辑已经涵盖在 LoadConfig_EmptyFile 中
-	// 实际上，当其他测试清理了文件时，LoadConfig 会自然进入这个分支
-
-	// 为了真正隔离测试，我们可以在临时目录中测试，但需要修改 LoadConfig 支持自定义路径
-	// 简化：这个测试不是必需的，因为 LoadConfig_EmptyFile 已经覆盖了文件不存在的场景
-	// 但我们保留测试以验证逻辑
-
+	// 测试配置文件不存在的情况
 	config, err := LoadConfig()
 	if err != nil {
 		t.Fatalf("LoadConfig() should not return error when file not exist: %v", err)
