@@ -67,6 +67,9 @@ type Settings struct {
 	// Channel holds channel-specific configurations
 	Channel *ChannelSettings `json:"channel,omitempty"`
 
+	// MCP holds MCP (Model Context Protocol) server configurations
+	MCP *MCPSettings `json:"mcp,omitempty"`
+
 	// Heartbeat configuration
 	EnableHeartbeat  bool `json:"enableHeartbeat"`  // 是否启用心跳机制
 	HeartbeatPeriod  int  `json:"heartbeatPeriod"`  // 心跳间隔（默认 1 分钟）
@@ -84,6 +87,15 @@ type Settings struct {
 	ThinkingBudget       int     `json:"thinkingBudget"`       // 思考模式 token 预算，0 表示关闭
 	ShowToolUsageInReply bool    `json:"showToolUsageInReply"` // 是否在会话中回复tool使用说明
 	ShowThinkingInLog    bool    `json:"showThinkingInLog"`    // 是否在日志中输出LLM的思考内容
+}
+
+// MCPSettings holds MCP (Model Context Protocol) configuration
+type MCPSettings struct {
+	// Enabled controls whether MCP integration is enabled
+	Enabled bool `json:"enabled"`
+
+	// ConfigPath is the path to the MCP servers configuration file
+	ConfigPath string `json:"configPath,omitempty"`
 }
 
 // GetSettingsDir returns the path to the config directory ~/.docclaw
@@ -122,6 +134,9 @@ func DefaultSettings() *Settings {
 				Enabled: true,
 				Port:    10086,
 			},
+		},
+		MCP: &MCPSettings{
+			Enabled: false, // MCP is disabled by default
 		},
 		MaxTurns:             1000,
 		MaxTokens:            8192,

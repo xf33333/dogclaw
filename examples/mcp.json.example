@@ -1,0 +1,24 @@
+{
+  "servers": [
+    {
+      "name": "example-server",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-example"
+      ],
+      "env": {
+        "EXAMPLE_API_KEY": "your-api-key-here"
+      }
+    },
+    {
+      "name": "filesystem",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/path/to/allowed/directory"
+      ]
+    }
+  ]
+}
