@@ -370,9 +370,12 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 			qe.logger.Debugf("[Turn %d/%d]", qe.currentTurn, maxTurnLabel)
 		}
 
+		// Build full system prompt with context (needs to be done before auto-compact check)
+		fullSystemPrompt, memSummary := qe.buildFullSystemPrompt()
+
 		// Check if auto-compact is needed
 		if qe.compactConfig.Enabled {
-			shouldCompact, tokenCount, threshold := compact.CheckAutoCompact(qe.messages, qe.compactConfig, qe.compactTracker)
+			shouldCompact, tokenCount, threshold := compact.CheckAutoCompact(qe.messages, fullSystemPrompt, qe.compactConfig, qe.compactTracker)
 			if shouldCompact {
 				if qe.verbose {
 					qe.logger.Debugf("[Auto-compact triggered: %d tokens >= threshold %d]", tokenCount, threshold)
@@ -415,9 +418,6 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 				qe.messages = snipResult.Remaining
 			}
 		}
-
-		// Build full system prompt with context
-		fullSystemPrompt, memSummary := qe.buildFullSystemPrompt()
 
 		// Build API request
 		req := &api.MessageRequest{
@@ -813,9 +813,12 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 			qe.logger.Infof("[Turn %d/%d]", qe.currentTurn, qe.maxTurns)
 		}
 
+		// Build full system prompt with context (needs to be done before auto-compact check)
+		fullSystemPrompt, memSummary := qe.buildFullSystemPrompt()
+
 		// Check if auto-compact is needed
 		if qe.compactConfig.Enabled {
-			shouldCompact, tokenCount, threshold := compact.CheckAutoCompact(qe.messages, qe.compactConfig, qe.compactTracker)
+			shouldCompact, tokenCount, threshold := compact.CheckAutoCompact(qe.messages, fullSystemPrompt, qe.compactConfig, qe.compactTracker)
 			if shouldCompact {
 				if qe.verbose {
 					qe.logger.Infof("[Auto-compact triggered: %d tokens >= threshold %d]", tokenCount, threshold)
@@ -859,7 +862,6 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 		}
 
 		// Build API request
-		fullSystemPrompt, memSummary := qe.buildFullSystemPrompt()
 		req := &api.MessageRequest{
 			Model:         qe.client.Model,
 			MaxTokens:     qe.maxTokens,

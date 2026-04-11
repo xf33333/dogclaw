@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"dogclaw/pkg/types"
 )
@@ -152,6 +153,15 @@ func (t *GrepTool) Call(ctx context.Context, input map[string]any, toolCtx types
 	// In case of error (like file not found), result.IsError will be true
 	if result.IsError {
 		return result, nil
+	}
+
+	// 检查输出内容长度，避免超过上下文限制
+	const maxContentLength = 16000 // 大约 16KB 的字符限制
+	if utf8.RuneCountInString(output) > maxContentLength {
+		return &types.ToolResult{
+			Data:    fmt.Sprintf("搜索结果内容太多，超过了长度限制。请缩小搜索范围，例如使用更精确的模式、限定目录路径或使用 glob 过滤文件类型。当前匹配行数: %d", strings.Count(output, "\n")+1),
+			IsError: true,
+		}, nil
 	}
 
 	// Optimization for model feedback

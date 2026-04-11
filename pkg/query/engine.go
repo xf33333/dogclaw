@@ -510,7 +510,8 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 				qe.lastAssistantText = "Auto-compact disabled"
 				qe.logger.Info("Auto-compact disabled")
 			case "status":
-				tokenCount := compact.EstimateMessagesTokenCount(qe.messages)
+				fullSystemPrompt, _ := qe.buildFullSystemPrompt()
+				tokenCount := compact.EstimateTotalContextTokenCount(qe.messages, fullSystemPrompt)
 				threshold := int(float64(qe.compactConfig.ModelContextWindow) * qe.compactConfig.ThresholdRatio)
 				msg := fmt.Sprintf("Auto-compact: enabled=%v, tokens=%d, threshold=%d, compacted=%v",
 					qe.compactConfig.Enabled, tokenCount, threshold, qe.compactTracker.Compacted)
@@ -752,7 +753,7 @@ func (qe *QueryEngine) handleStatusCommand() string {
 
 	// Show message types summary
 	var userMsgs, assistantMsgs int
-	var totalTokens int
+	var messageTokens int
 	for _, msg := range qe.messages {
 		switch msg.Role {
 		case "user":
@@ -763,19 +764,19 @@ func (qe *QueryEngine) handleStatusCommand() string {
 		// Calculate tokens for each message
 		switch v := msg.Content.(type) {
 		case string:
-			totalTokens += compact.EstimateTokenCount(v)
+			messageTokens += compact.EstimateTokenCount(v)
 		case []api.ContentBlockParam:
 			for _, block := range v {
 				if block.Type == "text" {
-					totalTokens += compact.EstimateTokenCount(block.Text)
+					messageTokens += compact.EstimateTokenCount(block.Text)
 				} else if block.Type == "tool_use" {
 					data, _ := json.Marshal(block.Input)
-					totalTokens += compact.EstimateTokenCount(string(data))
+					messageTokens += compact.EstimateTokenCount(string(data))
 				} else if block.Type == "tool_result" {
 					if blocks, ok := block.Content.([]api.ContentBlockParam); ok {
 						for _, sub := range blocks {
 							if sub.Type == "text" {
-								totalTokens += compact.EstimateTokenCount(sub.Text)
+								messageTokens += compact.EstimateTokenCount(sub.Text)
 							}
 						}
 					}
@@ -785,7 +786,15 @@ func (qe *QueryEngine) handleStatusCommand() string {
 	}
 	sb.WriteString(fmt.Sprintf("  • User Messages: %d\n", userMsgs))
 	sb.WriteString(fmt.Sprintf("  • Assistant Messages: %d\n", assistantMsgs))
-	sb.WriteString(fmt.Sprintf("  • Estimated Tokens: %d\n", totalTokens))
+	sb.WriteString(fmt.Sprintf("  • Message Tokens: %d\n", messageTokens))
+
+	// Calculate system prompt and memory tokens
+	fullSystemPrompt, _ := qe.buildFullSystemPrompt()
+	systemPromptTokens := compact.EstimateTokenCount(fullSystemPrompt)
+	totalTokens := messageTokens + systemPromptTokens
+
+	sb.WriteString(fmt.Sprintf("  • System+Memory Tokens: %d\n", systemPromptTokens))
+	sb.WriteString(fmt.Sprintf("  • Total Estimated Tokens: %d\n", totalTokens))
 
 	// Show context window usage
 	contextWindow := qe.compactConfig.ModelContextWindow
@@ -1488,7 +1497,8 @@ func (qe *QueryEngine) autoCompactAfterResume() {
 
 	// 检查是否需要压缩（使用相同的逻辑作为常规自动压缩）
 	if qe.compactConfig.Enabled {
-		shouldCompact, tokenCount, threshold := compact.CheckAutoCompact(qe.messages, qe.compactConfig, qe.compactTracker)
+		fullSystemPrompt, _ := qe.buildFullSystemPrompt()
+		shouldCompact, tokenCount, threshold := compact.CheckAutoCompact(qe.messages, fullSystemPrompt, qe.compactConfig, qe.compactTracker)
 		if shouldCompact {
 			if qe.verbose {
 				qe.logger.Debugf("[Resume] Auto-compact triggered: %d tokens >= threshold %d", tokenCount, threshold)

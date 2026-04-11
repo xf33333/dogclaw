@@ -137,9 +137,16 @@ func EstimateMessagesTokenCount(messages []api.MessageParam) int {
 	return total
 }
 
+// EstimateTotalContextTokenCount estimates total token count including messages and system prompt
+func EstimateTotalContextTokenCount(messages []api.MessageParam, systemPrompt string) int {
+	messageTokens := EstimateMessagesTokenCount(messages)
+	systemTokens := EstimateTokenCount(systemPrompt)
+	return messageTokens + systemTokens
+}
+
 // CheckAutoCompact checks if compaction should be triggered
-func CheckAutoCompact(messages []api.MessageParam, config *AutoCompactConfig, tracker *AutoCompactTracker) (bool, int, int) {
-	tokenCount := EstimateMessagesTokenCount(messages)
+func CheckAutoCompact(messages []api.MessageParam, systemPrompt string, config *AutoCompactConfig, tracker *AutoCompactTracker) (bool, int, int) {
+	tokenCount := EstimateTotalContextTokenCount(messages, systemPrompt)
 	threshold := int(float64(config.ModelContextWindow) * config.ThresholdRatio)
 
 	return tokenCount >= threshold, tokenCount, threshold
