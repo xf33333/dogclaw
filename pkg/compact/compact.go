@@ -219,11 +219,11 @@ func compactMessagesInternal(
 	}
 
 	// Determine split point: preserve recent messages, compact older ones
-	// Keep last 3-4 messages (recent context), compact everything before
-	preserveCount := 4
+	// Keep last 6 messages (recent context), compact everything before
+	preserveCount := 6
 	if force {
 		// For forced compaction, preserve fewer messages to compact more
-		preserveCount = 2
+		preserveCount = 3
 	}
 	if len(messages) <= preserveCount {
 		if force {
