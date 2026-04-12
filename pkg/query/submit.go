@@ -380,6 +380,14 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 				if qe.verbose {
 					qe.logger.Debugf("[Auto-compact triggered: %d tokens >= threshold %d]", tokenCount, threshold)
 				}
+				// Notify user about compression
+				compactionMsg := fmt.Sprintf("🔄 正在压缩上下文... (%d 条消息, %d tokens)", 
+					len(qe.messages), tokenCount)
+				if qe.TextCallback != nil {
+					qe.TextCallback(compactionMsg)
+				}
+				qe.logger.Info(compactionMsg)
+
 				result, err := compact.CompactMessages(ctx, qe.client, qe.messages, qe.systemPrompt, qe.compactConfig)
 				if err != nil {
 					qe.logger.Errorf("[Auto-compact error: %v]", err)
@@ -387,11 +395,16 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 					qe.messages = compact.ApplyCompactResult(qe.messages, result)
 					qe.compactTracker.Compacted = true
 					qe.compactTracker.TurnCounter++
-					if qe.verbose {
-						qe.logger.Debugf("[Auto-compact complete: %d -> %d messages, %d -> %d tokens]",
-							result.OriginalMessageCount, result.CompactedMessageCount,
-							result.PreCompactTokenCount, result.PostCompactTokenCount)
+					
+					// Notify user about compression result
+					compactionResult := fmt.Sprintf("✅ 上下文压缩完成！%d 条 → %d 条, %d tokens → %d tokens",
+						result.OriginalMessageCount, result.CompactedMessageCount,
+						result.PreCompactTokenCount, result.PostCompactTokenCount)
+					if qe.TextCallback != nil {
+						qe.TextCallback(compactionResult)
 					}
+					qe.logger.Info(compactionResult)
+					
 					// Save the compacted session to transcript metadata
 					_ = qe.saveCompactedSession(result)
 				}
@@ -823,6 +836,14 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 				if qe.verbose {
 					qe.logger.Infof("[Auto-compact triggered: %d tokens >= threshold %d]", tokenCount, threshold)
 				}
+				// Notify user about compression
+				compactionMsg := fmt.Sprintf("🔄 正在压缩上下文... (%d 条消息, %d tokens)", 
+					len(qe.messages), tokenCount)
+				if qe.TextCallback != nil {
+					qe.TextCallback(compactionMsg)
+				}
+				qe.logger.Info(compactionMsg)
+
 				result, err := compact.CompactMessages(ctx, qe.client, qe.messages, qe.systemPrompt, qe.compactConfig)
 				if err != nil {
 					qe.logger.Infof("[Auto-compact error: %v]", err)
@@ -830,11 +851,16 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 					qe.messages = compact.ApplyCompactResult(qe.messages, result)
 					qe.compactTracker.Compacted = true
 					qe.compactTracker.TurnCounter++
-					if qe.verbose {
-						qe.logger.Debugf("[Auto-compact complete: %d -> %d messages, %d -> %d tokens]",
-							result.OriginalMessageCount, result.CompactedMessageCount,
-							result.PreCompactTokenCount, result.PostCompactTokenCount)
+					
+					// Notify user about compression result
+					compactionResult := fmt.Sprintf("✅ 上下文压缩完成！%d 条 → %d 条, %d tokens → %d tokens",
+						result.OriginalMessageCount, result.CompactedMessageCount,
+						result.PreCompactTokenCount, result.PostCompactTokenCount)
+					if qe.TextCallback != nil {
+						qe.TextCallback(compactionResult)
 					}
+					qe.logger.Info(compactionResult)
+					
 					// Save the compacted session to transcript metadata
 					_ = qe.saveCompactedSession(result)
 				}
