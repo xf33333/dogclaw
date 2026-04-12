@@ -50,6 +50,7 @@ type QueryEngine struct {
 	sessionID      string
 	channelName    string // 用于区分不同 channel 的会话（例如 "qq", "weixin", "cli"）
 	historyMgr     *history.HistoryManager
+	settings       *config.Settings // 当前生效的配置
 
 	// Slash command support
 	cmdRegistry *slash.CommandRegistry
@@ -551,6 +552,11 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 		qe.lastAssistantText = out
 		qe.logger.Info(out)
 
+	case "setting":
+		out := qe.handleSettingCommand()
+		qe.lastAssistantText = out
+		qe.logger.Info(out)
+
 	case "restart":
 		qe.SetNeedsRestart(true)
 		msg := "重启命令已收到，程序即将重启..."
@@ -990,6 +996,103 @@ func (qe *QueryEngine) SetShowToolUsageInReply(enabled bool) {
 // SetShowThinkingInLog sets whether to log thinking content
 func (qe *QueryEngine) SetShowThinkingInLog(enabled bool) {
 	qe.showThinkingInLog = enabled
+}
+
+// SetSettings sets the configuration settings for the query engine
+func (qe *QueryEngine) SetSettings(settings *config.Settings) {
+	qe.settings = settings
+	// Apply settings to engine fields
+	if settings != nil {
+		qe.compactConfig = settings.ToAutoCompactConfig()
+		qe.snipConfig = settings.ToSnipConfig()
+		if settings.MaxContextLength > 0 {
+			qe.SetMaxContextLength(settings.MaxContextLength)
+		}
+		if settings.MaxTokens > 0 {
+			qe.maxTokens = settings.MaxTokens
+		}
+		if settings.MaxTurns > 0 {
+			qe.maxTurns = settings.MaxTurns
+		}
+		qe.verbose = settings.Verbose
+	}
+}
+
+// handleSettingCommand handles /setting command - shows current active configuration
+func (qe *QueryEngine) handleSettingCommand() string {
+	var sb strings.Builder
+	sb.WriteString("⚙️  Current Configuration:\n")
+
+	// Model settings
+	sb.WriteString(fmt.Sprintf("  • Model: %s\n", qe.modelName))
+	sb.WriteString(fmt.Sprintf("  • Max Tokens: %d\n", qe.maxTokens))
+	sb.WriteString(fmt.Sprintf("  • Max Turns: %d\n", qe.maxTurns))
+	sb.WriteString(fmt.Sprintf("  • Max Context Length: %d\n", qe.compactConfig.ModelContextWindow))
+
+	// Temperature and sampling
+	// sb.WriteString(fmt.Sprintf("  • Temperature: %.2f\n", qe.thinkingConfig.Temperature)) // Wait, we need to add Temperature to thinking.Config or Settings
+	// Let's use qe.settings if available
+	if qe.settings != nil {
+		sb.WriteString(fmt.Sprintf("  • Temperature: %.2f\n", qe.settings.Temperature))
+		sb.WriteString(fmt.Sprintf("  • Top P: %.2f\n", qe.settings.TopP))
+	}
+
+	// Thinking mode
+	sb.WriteString(fmt.Sprintf("  • Thinking: %s (budget: %d tokens)\n",
+		func() string {
+			if !qe.thinkingConfig.Enabled {
+				return "disabled"
+			}
+			return string(qe.thinkingConfig.Type)
+		}(), qe.thinkingConfig.BudgetTokens))
+
+	// Display settings
+	sb.WriteString(fmt.Sprintf("  • Verbose: %v\n", qe.verbose))
+	sb.WriteString(fmt.Sprintf("  • Show Tool Usage in Reply: %v\n", qe.showToolUsageInReply))
+	sb.WriteString(fmt.Sprintf("  • Show Thinking in Log: %v\n", qe.showThinkingInLog))
+
+	// Budget
+	budgetStr := "unlimited"
+	if qe.maxBudgetUSD > 0 {
+		budgetStr = fmt.Sprintf("$%.2f (current: $%.4f)", qe.maxBudgetUSD, qe.currentCost)
+	}
+	sb.WriteString(fmt.Sprintf("  • Budget: %s\n", budgetStr))
+
+	// Auto-compact settings
+	sb.WriteString("\n🔄 Auto-Compact:\n")
+	sb.WriteString(fmt.Sprintf("  • Enabled: %v\n", qe.compactConfig.Enabled))
+	sb.WriteString(fmt.Sprintf("  • Threshold: %.0f%%\n", qe.compactConfig.ThresholdRatio*100))
+	sb.WriteString(fmt.Sprintf("  • Warning: %.0f%%\n", qe.compactConfig.WarningRatio*100))
+	sb.WriteString(fmt.Sprintf("  • Max Context Tokens: %d\n", qe.compactConfig.MaxContextTokens))
+
+	// Snip settings
+	sb.WriteString("\n✂️  Snip:\n")
+	sb.WriteString(fmt.Sprintf("  • Enabled: %v\n", qe.snipConfig.Enabled))
+	sb.WriteString(fmt.Sprintf("  • Max Messages: %d\n", qe.snipConfig.MaxMessages))
+	sb.WriteString(fmt.Sprintf("  • Preserve Count: %d\n", qe.snipConfig.PreserveCount))
+
+	// Heartbeat
+	sb.WriteString("\n💓 Heartbeat:\n")
+	heartbeatEnabled := func() bool {
+		qe.heartbeatMu.RLock()
+		defer qe.heartbeatMu.RUnlock()
+		return qe.heartbeatEnabled
+	}()
+	sb.WriteString(fmt.Sprintf("  • Enabled: %v\n", heartbeatEnabled))
+
+	// MCP settings
+	if qe.settings != nil && qe.settings.MCP != nil {
+		sb.WriteString("\n🔌 MCP:\n")
+		sb.WriteString(fmt.Sprintf("  • Enabled: %v\n", qe.settings.MCP.Enabled))
+		if qe.settings.MCP.ConfigPath != "" {
+			sb.WriteString(fmt.Sprintf("  • Config Path: %s\n", qe.settings.MCP.ConfigPath))
+		}
+	}
+
+	// Config file
+	sb.WriteString(fmt.Sprintf("\n📄 Config File: %s\n", config.GetConfigPath()))
+
+	return sb.String()
 }
 
 // GetThinkingConfig returns the current thinking config

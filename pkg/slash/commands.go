@@ -254,6 +254,15 @@ func RegisterBuiltinCommands(registry *CommandRegistry) {
 	})
 
 	registry.Register(&Command{
+		Name:        "setting",
+		Aliases:     []string{"settings", "config"},
+		Description: "Show current active configuration",
+		Type:        LocalCommand,
+		Source:      "builtin",
+		Handler:     HandleSetting,
+	})
+
+	registry.Register(&Command{
 		Name:        "reset",
 		Description: "Clear conversation history (alias of clear)",
 		Type:        LocalCommand,
@@ -289,6 +298,7 @@ func HandleHelp(ctx context.Context, args string) (*CommandResult, error) {
   /help, /h              - 显示此帮助信息
   /version, /v           - 显示版本信息
   /status, /stat         - 显示当前会话状态
+  /setting, /settings, /config - 显示当前生效的配置
   /exit, /quit, /q       - 退出程序
 
 💬 会话管理:
@@ -406,6 +416,14 @@ func HandleResume(ctx context.Context, args string) (*CommandResult, error) {
 
 // HandleStatus handles /status command - actual logic in engine.handleStatusCommand
 func HandleStatus(ctx context.Context, args string) (*CommandResult, error) {
+	// Just acknowledge - engine.handleSlashCommand will do the actual work
+	return &CommandResult{
+		Output: "", // empty output, engine will write logs
+	}, nil
+}
+
+// HandleSetting handles /setting command - actual logic in engine.handleSettingCommand
+func HandleSetting(ctx context.Context, args string) (*CommandResult, error) {
 	// Just acknowledge - engine.handleSlashCommand will do the actual work
 	return &CommandResult{
 		Output: "", // empty output, engine will write logs
