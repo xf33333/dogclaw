@@ -91,6 +91,7 @@ type CompactResult struct {
 	PreCompactTokenCount  int
 	PostCompactTokenCount int
 	SummaryMessages       []api.MessageParam
+	PostCompactMessages   []api.MessageParam // 完整的压缩后消息列表（摘要+保留的消息）
 	Attachments           []api.MessageParam
 }
 
@@ -296,6 +297,7 @@ func compactMessagesInternal(
 		PreCompactTokenCount:  tokenCount,
 		PostCompactTokenCount: EstimateMessagesTokenCount(postCompactMessages),
 		SummaryMessages:       postCompactMessages[:1],
+		PostCompactMessages:   postCompactMessages,
 	}
 
 	return result, nil
@@ -365,5 +367,9 @@ func ApplyCompactResult(messages []api.MessageParam, result *CompactResult) []ap
 	if result == nil {
 		return messages
 	}
+	if result.PostCompactMessages != nil {
+		return result.PostCompactMessages
+	}
+	// 兼容旧版本，没有 PostCompactMessages 字段时返回 SummaryMessages
 	return result.SummaryMessages
 }
