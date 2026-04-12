@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"dogclaw/pkg/compact"
 )
 
 const (
@@ -75,6 +77,12 @@ type Settings struct {
 	HeartbeatPeriod  int  `json:"heartbeatPeriod"`  // 心跳间隔（默认 1 分钟）
 	HeartbeatTimeout int  `json:"heartbeatTimeout"` // 心跳超时时间（超过此时间无活动则判断为中断）
 
+	// AutoCompact configuration (LLM-assisted context compression)
+	AutoCompact *AutoCompactSettings `json:"autoCompact,omitempty"`
+
+	// Snip configuration (aggressive message snipping)
+	Snip *SnipSettings `json:"snip,omitempty"`
+
 	// Other parameters
 	MaxTurns             int     `json:"maxTurns"`
 	MaxTokens            int     `json:"maxTokens"`            // 单次响应最大 token 数
@@ -87,6 +95,21 @@ type Settings struct {
 	ThinkingBudget       int     `json:"thinkingBudget"`       // 思考模式 token 预算，0 表示关闭
 	ShowToolUsageInReply bool    `json:"showToolUsageInReply"` // 是否在会话中回复tool使用说明
 	ShowThinkingInLog    bool    `json:"showThinkingInLog"`    // 是否在日志中输出LLM的思考内容
+}
+
+// AutoCompactSettings holds configuration for LLM-assisted context compression
+type AutoCompactSettings struct {
+	Enabled            bool    `json:"enabled"`            // 是否启用自动压缩
+	ThresholdRatio     float64 `json:"thresholdRatio"`     // 触发压缩的上下文比例（默认 0.75）
+	WarningRatio       float64 `json:"warningRatio"`       // 显示警告的上下文比例（默认 0.65）
+	MaxContextTokens   int     `json:"maxContextTokens"`   // 阻塞前的最大上下文 token 数
+}
+
+// SnipSettings holds configuration for aggressive message snipping
+type SnipSettings struct {
+	Enabled       bool `json:"enabled"`       // 是否启用激进裁剪
+	MaxMessages   int  `json:"maxMessages"`   // 触发裁剪的最大消息数（默认 50）
+	PreserveCount int  `json:"preserveCount"` // 保留的最近消息数（默认 6）
 }
 
 // MCPSettings holds MCP (Model Context Protocol) configuration
@@ -137,6 +160,17 @@ func DefaultSettings() *Settings {
 		},
 		MCP: &MCPSettings{
 			Enabled: false, // MCP is disabled by default
+		},
+		AutoCompact: &AutoCompactSettings{
+			Enabled:          true,
+			ThresholdRatio:   0.75, // 75% of context window
+			WarningRatio:     0.65, // 65% warning
+			MaxContextTokens: 190000,
+		},
+		Snip: &SnipSettings{
+			Enabled:       false, // Default disabled, prefer LLM compression
+			MaxMessages:   50,
+			PreserveCount: 6,
 		},
 		MaxTurns:             1000,
 		MaxTokens:            8192,
@@ -283,4 +317,30 @@ func (s *Settings) RemoveProvider(alias string) bool {
 		}
 	}
 	return false
+}
+
+// ToAutoCompactConfig converts AutoCompactSettings to compact.AutoCompactConfig
+func (s *Settings) ToAutoCompactConfig() *compact.AutoCompactConfig {
+	if s.AutoCompact == nil {
+		return compact.DefaultAutoCompactConfig()
+	}
+	return &compact.AutoCompactConfig{
+		Enabled:            s.AutoCompact.Enabled,
+		ThresholdRatio:     s.AutoCompact.ThresholdRatio,
+		WarningRatio:       s.AutoCompact.WarningRatio,
+		MaxContextTokens:   s.AutoCompact.MaxContextTokens,
+		ModelContextWindow: s.MaxContextLength,
+	}
+}
+
+// ToSnipConfig converts SnipSettings to compact.SnipConfig
+func (s *Settings) ToSnipConfig() *compact.SnipConfig {
+	if s.Snip == nil {
+		return compact.DefaultSnipConfig()
+	}
+	return &compact.SnipConfig{
+		Enabled:       s.Snip.Enabled,
+		MaxMessages:   s.Snip.MaxMessages,
+		PreserveCount: s.Snip.PreserveCount,
+	}
 }
