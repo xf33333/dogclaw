@@ -14,9 +14,9 @@ type SnipConfig struct {
 // DefaultSnipConfig returns sensible defaults
 func DefaultSnipConfig() *SnipConfig {
 	return &SnipConfig{
-		Enabled:       true,
-		MaxMessages:   50, // Trigger snip if we have more than 50 messages
-		PreserveCount: 6,  // Always keep the last 6 messages
+		Enabled:       false, // 默认禁用 snip，优先使用更智能的 LLM 压缩
+		MaxMessages:   50,    // Trigger snip if we have more than 50 messages
+		PreserveCount: 6,     // Always keep the last 6 messages
 	}
 }
 
