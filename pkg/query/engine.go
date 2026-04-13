@@ -114,8 +114,8 @@ type QueryEngine struct {
 	queryLimitGraceMode bool
 
 	// Processing state
-	isProcessing      bool          // 当前是否有正在进行的查询
-	processingMu      sync.RWMutex  // 保护处理状态的锁
+	isProcessing bool         // 当前是否有正在进行的查询
+	processingMu sync.RWMutex // 保护处理状态的锁
 
 	// logger is the logrus instance for structured logging
 	logger            *logrus.Logger
@@ -202,8 +202,6 @@ func NewQueryEngine(client *api.Client, tools []types.Tool, systemPrompt string,
 		// Transcript system
 		transcriptProjectMgr: pm,
 		sessionManager:       sm,
-
-
 
 		// Logger
 		logger: logger,
@@ -456,7 +454,7 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 				qe.lastAssistantText = fmt.Sprintf("Compaction failed: %v", err)
 				qe.logger.Errorf("Compaction failed: %v", err)
 			} else if result != nil {
-				
+
 				qe.messages = compact.ApplyCompactResult(qe.messages, result)
 				qe.compactTracker.Compacted = true
 				qe.compactTracker.TurnCounter++
@@ -1035,7 +1033,6 @@ func (qe *QueryEngine) handleSettingCommand() string {
 	sb.WriteString(fmt.Sprintf("  • Warning: %.0f%%\n", qe.compactConfig.WarningRatio*100))
 	sb.WriteString(fmt.Sprintf("  • Max Context Tokens: %d\n", qe.compactConfig.MaxContextTokens))
 
-
 	// MCP settings
 	if qe.settings != nil && qe.settings.MCP != nil {
 		sb.WriteString("\n🔌 MCP:\n")
@@ -1373,12 +1370,12 @@ func (qe *QueryEngine) autoCompactAfterResume(skipCompactCheck bool) {
 			if qe.verbose {
 				qe.logger.Debugf("[Resume] Auto-compact triggered: %d tokens >= threshold %d", tokenCount, threshold)
 			}
-			
+
 			result, err := compact.CompactMessages(context.Background(), qe.client, qe.messages, qe.systemPrompt, qe.compactConfig)
 			if err != nil {
 				qe.logger.Warnf("[Resume] CompactMessages failed: %v", err)
 			} else if result != nil {
-				
+
 				qe.messages = compact.ApplyCompactResult(qe.messages, result)
 				qe.compactTracker.Compacted = true
 				qe.compactTracker.TurnCounter++
@@ -1875,7 +1872,6 @@ func BuildSystemPrompt(tools []types.Tool, loadedSkills []*skills.Skill, customP
 	sb.WriteString("\n\n")
 
 	sb.WriteString("## Available Tools\n\n")
-	sb.WriteString("不要使用不在列表里的tool:\n")
 	for _, tool := range tools {
 		if !tool.IsEnabled() {
 			continue
@@ -1886,11 +1882,12 @@ func BuildSystemPrompt(tools []types.Tool, loadedSkills []*skills.Skill, customP
 
 	if len(loadedSkills) > 0 {
 		sb.WriteString("\n## Skills (mandatory)\n\n")
-		sb.WriteString("如果需要可以使用以下技能:\n")
+		sb.WriteString("###如果用户需要完成某些任务，优先查询是否可以使用以下技能:\n")
 		//sb.WriteString("- For simple skills (single SKILL.md), use 'Skill' tool with action 'install'.\n")
 		//sb.WriteString("- For complex skills (multiple files), manually create ~/.dogclaw/skills/<skill-name>/ and write SKILL.md plus any other assets using file tools.\n\n")
 		for _, s := range loadedSkills {
-			sb.WriteString(fmt.Sprintf("- **%s**: %s\n", s.Name, s.Description))
+			//sb.WriteString(fmt.Sprintf("- **%s**: %s\n", s.Name, s.Description))
+			sb.WriteString(fmt.Sprintf("- **%s**\n", s.Name))
 		}
 	}
 

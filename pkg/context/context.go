@@ -13,7 +13,7 @@ const maxStatusChars = 2000
 
 // SystemContext holds system-level context injected into every conversation
 type SystemContext struct {
-	GitStatus    string
+	//GitStatus    string
 	CurrentDate  string
 	CacheBreaker string
 }
@@ -34,7 +34,7 @@ var (
 func GetSystemContext() *SystemContext {
 	systemContextOnce.Do(func() {
 		systemContextVal = &SystemContext{
-			GitStatus:   getGitStatus(),
+			//GitStatus:   getGitStatus(),
 			CurrentDate: getCurrentDate(),
 		}
 	})
@@ -181,9 +181,9 @@ func BuildFullSystemPrompt(baseSystemPrompt string, claudeMdContent string) stri
 
 	// System context (git status)
 	sysCtx := GetSystemContext()
-	if sysCtx.GitStatus != "" {
-		parts = append(parts, "## Git Status\n\n"+sysCtx.GitStatus)
-	}
+	//if sysCtx.GitStatus != "" {
+	//	parts = append(parts, "## Git Status\n\n"+sysCtx.GitStatus)
+	//}
 
 	// Current date
 	parts = append(parts, sysCtx.CurrentDate)

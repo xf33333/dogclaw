@@ -15,8 +15,10 @@ func NewRestartGatewayTool() *RestartGatewayTool {
 	return &RestartGatewayTool{}
 }
 
-func (t *RestartGatewayTool) Name() string      { return "RestartGateway" }
-func (t *RestartGatewayTool) Aliases() []string { return []string{"restart", "reboot", "restart-gateway"} }
+func (t *RestartGatewayTool) Name() string { return "RestartGateway" }
+func (t *RestartGatewayTool) Aliases() []string {
+	return []string{"restart", "reboot", "restart-gateway"}
+}
 
 func (t *RestartGatewayTool) InputSchema() types.ToolInputSchema {
 	return types.ToolInputSchema{
@@ -55,5 +57,5 @@ func (t *RestartGatewayTool) Call(ctx context.Context, input map[string]any, too
 func (t *RestartGatewayTool) IsConcurrencySafe(input map[string]any) bool { return false }
 func (t *RestartGatewayTool) IsReadOnly(input map[string]any) bool        { return false }
 func (t *RestartGatewayTool) IsDestructive(input map[string]any) bool     { return false }
-func (t *RestartGatewayTool) IsEnabled() bool                             { return true }
+func (t *RestartGatewayTool) IsEnabled() bool                             { return false }
 func (t *RestartGatewayTool) SearchHint() string                          { return "restart reboot gateway" }

@@ -311,8 +311,6 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 		return err
 	}
 
-
-
 	// One-time memory initialization (semantic index + compaction)
 	qe.initMemoryIndex(ctx)
 	qe.tryCompactMemory(ctx)
@@ -329,8 +327,6 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 
 	// Record to transcript
 	qe.RecordMessageToTranscript(transcript.MessageTypeUser, "user", []byte(prompt))
-
-
 
 	// Reset turn counter for per-query budget
 	qe.resetForNewQuery()
@@ -387,7 +383,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 				if err != nil {
 					qe.logger.Errorf("[Auto-compact error: %v]", err)
 				} else if result != nil {
-					
+
 					qe.messages = compact.ApplyCompactResult(qe.messages, result)
 					qe.compactTracker.Compacted = true
 					qe.compactTracker.TurnCounter++
@@ -453,8 +449,6 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 			qe.dumpMessageRequest(req)
 			qe.logger.Debug("dumpMessageRequest1")
 		}
-
-
 
 		// Call API
 		resp, err := qe.client.SendMessage(ctx, req)
@@ -531,8 +525,6 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 				return fmt.Errorf("reached maximum budget ($%.2f)", qe.maxBudgetUSD)
 			}
 		}
-
-		
 
 		// Build assistant message content blocks
 		var assistantContent []api.ContentBlockParam
@@ -709,8 +701,6 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 			// Record tool call to transcript
 			qe.RecordToolCallToTranscript(toolUseID, toolName, inputMap)
 
-
-
 			// Execute tool
 			toolCtx := types.ToolUseContext{
 				Cwd:             qe.cwd,
@@ -725,8 +715,6 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 				qe.RecordToolResultToTranscript(toolUseID, toolName, err.Error(), true)
 				continue
 			}
-
-
 
 			// Log tool result summary
 			resultStr, _ := json.Marshal(result.Data)
@@ -747,7 +735,6 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 
 			// Add tool result
 			qe.addToolResult(toolUseID, string(resultStr), result.IsError)
-
 
 		}
 
@@ -777,8 +764,6 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 	// Clear any previous assistant text for this session
 	qe.lastAssistantText = ""
 
-
-
 	// One-time memory initialization (semantic index + compaction)
 	qe.initMemoryIndex(ctx)
 	qe.tryCompactMemory(ctx)
@@ -786,8 +771,6 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 	// Main query loop
 	for qe.currentTurn < qe.maxTurns {
 		qe.currentTurn++
-
-
 
 		if qe.verbose {
 			qe.logger.Infof("[Turn %d/%d]", qe.currentTurn, qe.maxTurns)
@@ -815,7 +798,7 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 				if err != nil {
 					qe.logger.Infof("[Auto-compact error: %v]", err)
 				} else if result != nil {
-					
+
 					qe.messages = compact.ApplyCompactResult(qe.messages, result)
 					qe.compactTracker.Compacted = true
 					qe.compactTracker.TurnCounter++
@@ -875,8 +858,6 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 			qe.dumpMessageRequest(req)
 			logger.Debug("dumpMessageRequest2")
 		}
-
-
 
 		resp, err := qe.client.SendMessage(ctx, req)
 		if err == nil && qe.verbose {
@@ -943,8 +924,6 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 				return fmt.Errorf("reached maximum budget ($%.2f)", qe.maxBudgetUSD)
 			}
 		}
-
-		
 
 		var assistantContent []api.ContentBlockParam
 
@@ -1185,9 +1164,9 @@ func (qe *QueryEngine) buildFullSystemPrompt() (string, *api.MemorySummary) {
 	}
 
 	sysCtx := ctxpkg.GetSystemContext()
-	if sysCtx.GitStatus != "" {
-		parts = append(parts, "## Git Status\n\n"+sysCtx.GitStatus)
-	}
+	//if sysCtx.GitStatus != "" {
+	//	parts = append(parts, "## Git Status\n\n"+sysCtx.GitStatus)
+	//}
 	parts = append(parts, sysCtx.CurrentDate)
 
 	return strings.Join(parts, "\n\n"), summary
@@ -1325,7 +1304,7 @@ func (qe *QueryEngine) tryRecoverFromContextExceeded(ctx context.Context, err er
 
 		result, compactErr := compact.CompactMessages(ctx, qe.client, qe.messages, qe.systemPrompt, fallbackConfig)
 		if compactErr == nil && result != nil {
-			
+
 			qe.messages = compact.ApplyCompactResult(qe.messages, result)
 			qe.compactTracker.Compacted = true
 			if qe.verbose {
@@ -1423,11 +1402,9 @@ func (qe *QueryEngine) tryRecoverFromTimeout(ctx context.Context, err error) (bo
 		compactCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
-
-
 		result, compactErr := compact.CompactMessages(compactCtx, qe.client, qe.messages, qe.systemPrompt, qe.compactConfig)
 		if compactErr == nil && result != nil {
-			
+
 			qe.messages = compact.ApplyCompactResult(qe.messages, result)
 			qe.compactTracker.Compacted = true
 			if qe.verbose {
