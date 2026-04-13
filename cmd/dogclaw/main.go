@@ -308,8 +308,8 @@ func main() {
 	} else {
 		keyPreview = apiKey
 	}
-	fmt.Printf("🔑 Using %s, provider: %s (Key: %s, BaseURL: %s, Model: %s)\n",
-		provider, provider, keyPreview, cfg.BaseURL, cfg.Model)
+	fmt.Printf("🔑 Using %s, provider: %s (Key: %s, BaseURL: %s, Model: %s) multiProjectMode=%v\n",
+		provider, provider, keyPreview, cfg.BaseURL, cfg.Model, multiProjectMode)
 
 	// Start based on mode
 	switch startupMode {

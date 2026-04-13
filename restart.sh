@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR" || exit 1
 
 BINARY_NAME="dogclaw"
-APP_CMD="./$BINARY_NAME gateway"
+APP_CMD="./$BINARY_NAME gateway --multi-project true"
 APP_NAME="$BINARY_NAME gateway"
 LOG_DIR="logs"
 LOG_FILE="$LOG_DIR/app.log"
