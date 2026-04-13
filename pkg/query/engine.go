@@ -1,6 +1,7 @@
 package query
 
 import (
+	"container/list"
 	"context"
 	"dogclaw/internal/logger"
 	"encoding/json"
@@ -117,6 +118,14 @@ type QueryEngine struct {
 	isProcessing bool         // 当前是否有正在进行的查询
 	processingMu sync.RWMutex // 保护处理状态的锁
 
+	// Conversation timing
+	conversationStartTime time.Time // 对话开始时间戳
+	conversationEndTime   time.Time // 对话结束时间戳
+
+	// User input buffer for插队处理
+	userInputQueue     *list.List    // 用户输入队列
+	userInputQueueMu   sync.RWMutex  // 保护用户输入队列的锁
+
 	// logger is the logrus instance for structured logging
 	logger            *logrus.Logger
 	lastAssistantText string // cached text of most recent assistant reply (for channels)
@@ -205,6 +214,9 @@ func NewQueryEngine(client *api.Client, tools []types.Tool, systemPrompt string,
 
 		// Logger
 		logger: logger,
+
+		// User input queue
+		userInputQueue: list.New(),
 	}
 }
 
@@ -229,6 +241,40 @@ func (qe *QueryEngine) SetChannelName(channelName string) {
 // GetChannelName returns the current channel name
 func (qe *QueryEngine) GetChannelName() string {
 	return qe.channelName
+}
+
+// EnqueueUserInput enqueues user input for插队处理
+func (qe *QueryEngine) EnqueueUserInput(input string) {
+	qe.userInputQueueMu.Lock()
+	defer qe.userInputQueueMu.Unlock()
+	qe.userInputQueue.PushBack(input)
+}
+
+// DequeueUserInput dequeues user input from the queue
+func (qe *QueryEngine) DequeueUserInput() string {
+	qe.userInputQueueMu.Lock()
+	defer qe.userInputQueueMu.Unlock()
+	if qe.userInputQueue.Len() == 0 {
+		return ""
+	}
+	front := qe.userInputQueue.Front()
+	input := front.Value.(string)
+	qe.userInputQueue.Remove(front)
+	return input
+}
+
+// ClearUserInputQueue clears the user input queue
+func (qe *QueryEngine) ClearUserInputQueue() {
+	qe.userInputQueueMu.Lock()
+	defer qe.userInputQueueMu.Unlock()
+	qe.userInputQueue.Init()
+}
+
+// GetUserInputQueueLength returns the length of the user input queue
+func (qe *QueryEngine) GetUserInputQueueLength() int {
+	qe.userInputQueueMu.RLock()
+	defer qe.userInputQueueMu.RUnlock()
+	return qe.userInputQueue.Len()
 }
 
 // SetWorkingDir sets the working directory for project session storage

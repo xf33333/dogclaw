@@ -295,11 +295,24 @@ func messageContentToString(content any) string {
 
 // SubmitMessage processes a user message and runs the tool call loop
 func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
+	// Check if already processing
+	if qe.IsProcessing() {
+		// Already processing, enqueue the input
+		qe.EnqueueUserInput(prompt)
+		if qe.verbose {
+			qe.logger.Debugf("[队列处理] 已在处理会话，将输入加入队列: %s", prompt)
+		}
+		return nil
+	}
+
 	qe.SetProcessing(true)
 	defer qe.SetProcessing(false)
 
 	// Clear previous assistant text for this new turn
 	qe.lastAssistantText = ""
+
+	// Record conversation start time
+	qe.conversationStartTime = time.Now()
 
 	// Check if this is a slash command BEFORE triggering any LLM operations (like memory initialization)
 	if slash.IsSlashCommand(prompt) {
@@ -334,6 +347,41 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 	// Main query loop
 	timeoutRecoveryCount := 0
 	for qe.currentTurn < qe.effectiveMaxTurns() {
+		// Check for user input queue (插队处理)
+		for qe.GetUserInputQueueLength() > 0 {
+			userInput := qe.DequeueUserInput()
+			if userInput != "" {
+				// Check for /stop command
+				if userInput == "/stop" {
+					qe.ClearUserInputQueue()
+					qe.conversationEndTime = time.Now()
+					elapsed := qe.conversationEndTime.Sub(qe.conversationStartTime)
+					minutes := int(elapsed.Minutes())
+					seconds := int(elapsed.Seconds()) % 60
+					stopMsg := fmt.Sprintf("对话已终止。本次对话用时：%d分%d秒", minutes, seconds)
+					if qe.TextCallback != nil {
+						qe.TextCallback(stopMsg)
+					}
+					qe.logger.Info(stopMsg)
+					return nil
+				}
+				// Process插队输入
+				// Add插队用户消息
+				interruptMsg := api.MessageParam{
+					Role:    "user",
+					Content: userInput,
+				}
+				qe.messages = append(qe.messages, interruptMsg)
+				// Record to transcript
+				qe.RecordMessageToTranscript(transcript.MessageTypeUser, "user", []byte(userInput))
+				// Add to history
+				qe.historyMgr.AddSimpleHistory(userInput)
+				if qe.verbose {
+					qe.logger.Debugf("[插队处理] 处理用户输入: %s", userInput)
+				}
+			}
+		}
+
 		qe.currentTurn++
 
 		// Query limit grace mode: if we've exceeded the per-query budget
@@ -645,6 +693,17 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 				qe.lastAssistantText = "（模型未返回文字内容）"
 			}
 
+			// Record conversation end time and calculate duration
+			qe.conversationEndTime = time.Now()
+			elapsed := qe.conversationEndTime.Sub(qe.conversationStartTime)
+			minutes := int(elapsed.Minutes())
+			seconds := int(elapsed.Seconds()) % 60
+			timeMsg := fmt.Sprintf("本次对话用时：%d分%d秒", minutes, seconds)
+			if qe.TextCallback != nil {
+				qe.TextCallback(timeMsg)
+			}
+			qe.logger.Info(timeMsg)
+
 			if qe.verbose {
 				qe.logger.Debug("[Response complete]")
 			}
@@ -768,8 +827,78 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 	qe.initMemoryIndex(ctx)
 	qe.tryCompactMemory(ctx)
 
+	// Check for initial user input in queue
+	if qe.GetUserInputQueueLength() > 0 {
+		// Process initial user input
+		for qe.GetUserInputQueueLength() > 0 {
+			userInput := qe.DequeueUserInput()
+			if userInput != "" {
+				// Check for /stop command
+				if userInput == "/stop" {
+					qe.ClearUserInputQueue()
+					stopMsg := "对话已终止。"
+					if qe.TextCallback != nil {
+						qe.TextCallback(stopMsg)
+					}
+					qe.logger.Info(stopMsg)
+					return nil
+				}
+				// Add user message
+				userMsg := api.MessageParam{
+					Role:    "user",
+					Content: userInput,
+				}
+				qe.messages = append(qe.messages, userMsg)
+				// Record to transcript
+				qe.RecordMessageToTranscript(transcript.MessageTypeUser, "user", []byte(userInput))
+				// Add to history
+				qe.historyMgr.AddSimpleHistory(userInput)
+				if qe.verbose {
+					qe.logger.Debugf("[初始输入] 处理用户输入: %s", userInput)
+				}
+			}
+		}
+		// Record conversation start time
+		qe.conversationStartTime = time.Now()
+	}
+
 	// Main query loop
 	for qe.currentTurn < qe.maxTurns {
+		// Check for user input queue (插队处理)
+		for qe.GetUserInputQueueLength() > 0 {
+			userInput := qe.DequeueUserInput()
+			if userInput != "" {
+				// Check for /stop command
+				if userInput == "/stop" {
+					qe.ClearUserInputQueue()
+					qe.conversationEndTime = time.Now()
+					elapsed := qe.conversationEndTime.Sub(qe.conversationStartTime)
+					minutes := int(elapsed.Minutes())
+					seconds := int(elapsed.Seconds()) % 60
+					stopMsg := fmt.Sprintf("对话已终止。本次对话用时：%d分%d秒", minutes, seconds)
+					if qe.TextCallback != nil {
+						qe.TextCallback(stopMsg)
+					}
+					qe.logger.Info(stopMsg)
+					return nil
+				}
+				// Process插队输入
+				// Add插队用户消息
+				interruptMsg := api.MessageParam{
+					Role:    "user",
+					Content: userInput,
+				}
+				qe.messages = append(qe.messages, interruptMsg)
+				// Record to transcript
+				qe.RecordMessageToTranscript(transcript.MessageTypeUser, "user", []byte(userInput))
+				// Add to history
+				qe.historyMgr.AddSimpleHistory(userInput)
+				if qe.verbose {
+					qe.logger.Debugf("[插队处理] 处理用户输入: %s", userInput)
+				}
+			}
+		}
+
 		qe.currentTurn++
 
 		if qe.verbose {
@@ -1005,6 +1134,17 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 
 		if len(toolUseBlocks) == 0 {
 			// No tools - reply already cached above
+			// Record conversation end time and calculate duration
+			qe.conversationEndTime = time.Now()
+			elapsed := qe.conversationEndTime.Sub(qe.conversationStartTime)
+			minutes := int(elapsed.Minutes())
+			seconds := int(elapsed.Seconds()) % 60
+			timeMsg := fmt.Sprintf("本次对话用时：%d分%d秒", minutes, seconds)
+			if qe.TextCallback != nil {
+				qe.TextCallback(timeMsg)
+			}
+			qe.logger.Info(timeMsg)
+
 			if qe.verbose {
 				qe.logger.Debug("[Response complete]")
 			}
