@@ -16,13 +16,13 @@ func makeTimestamp() int64 {
 
 // CompactedSession holds the compacted session state for persistence
 type CompactedSession struct {
-	Version           string                 `json:"version"`
-	Timestamp         int64                  `json:"timestamp"`
-	OriginalMessages  int                    `json:"original_messages"`
-	CompactedMessages int                    `json:"compacted_messages"`
-	PreTokens         int                    `json:"pre_tokens"`
-	PostTokens        int                    `json:"post_tokens"`
-	Messages          []api.MessageParam     `json:"messages"`
+	Version           string             `json:"version"`
+	Timestamp         int64              `json:"timestamp"`
+	OriginalMessages  int                `json:"original_messages"`
+	CompactedMessages int                `json:"compacted_messages"`
+	PreTokens         int                `json:"pre_tokens"`
+	PostTokens        int                `json:"post_tokens"`
+	Messages          []api.MessageParam `json:"messages"`
 }
 
 const compactedSessionVersion = "1.0"
@@ -236,7 +236,7 @@ func compactMessagesInternal(
 
 	var messagesToCompact []api.MessageParam
 	var messagesToPreserve []api.MessageParam
-	
+
 	if preserveCount == 0 {
 		messagesToCompact = messages
 		messagesToPreserve = []api.MessageParam{}
@@ -317,7 +317,7 @@ func buildCompactPrompt(messages []api.MessageParam) string {
 	sb.WriteString("- Repetitive tool calls and their outputs\n")
 	sb.WriteString("- Minor corrections or typos\n")
 	sb.WriteString("- Intermediate thinking steps\n\n")
-	sb.WriteString("Keep the summary under 2000 characters.\n\n")
+	sb.WriteString("Keep the summary under 5000 characters.\n\n")
 	sb.WriteString("--- Conversation History ---\n\n")
 
 	for _, msg := range messages {
