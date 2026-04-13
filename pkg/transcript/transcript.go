@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -105,11 +106,11 @@ type TranscriptFile struct {
 // NewTranscriptFile creates a new transcript file manager for the given path
 func NewTranscriptFile(filePath string) *TranscriptFile {
 	tf := &TranscriptFile{
-		filePath:    filePath,
-		writeQueue:  make([]TranscriptRecord, 0, 64),
-		seenUUIDs:   make(map[string]bool),
-		flushDone:   make(chan struct{}),
-		maxFileSize: DefaultMaxFileSize,
+		filePath:     filePath,
+		writeQueue:   make([]TranscriptRecord, 0, 64),
+		seenUUIDs:    make(map[string]bool),
+		flushDone:    make(chan struct{}),
+		maxFileSize:  DefaultMaxFileSize,
 		rotationTime: time.Now(),
 	}
 
@@ -249,8 +250,8 @@ func (tf *TranscriptFile) Close() error {
 	return nil
 }
 
-// ReadMetadata reads metadata entries from the end of the transcript file.
-// It uses a tail-read optimization (reads only last 64KB) for efficiency.
+// ReadMetadata reads metadata entries from the transcript file.
+// It reads the entire file and processes lines from the end to find metadata entries.
 func (tf *TranscriptFile) ReadMetadata() (map[string]string, error) {
 	metadata := make(map[string]string)
 
@@ -263,27 +264,24 @@ func (tf *TranscriptFile) ReadMetadata() (map[string]string, error) {
 	}
 	defer f.Close()
 
-	info, err := f.Stat()
+	// Read entire file content
+	content, err := io.ReadAll(f)
 	if err != nil {
-		return nil, fmt.Errorf("failed to stat transcript file: %w", err)
+		return nil, fmt.Errorf("failed to read transcript file: %w", err)
 	}
 
-	// Tail-read optimization: only read last 64KB
-	const tailReadSize = 64 * 1024
-	fileSize := info.Size()
-	readOffset := int64(0)
-	if fileSize > tailReadSize {
-		readOffset = fileSize - tailReadSize
-	}
+	// Split content into lines
+	lines := bytes.Split(content, []byte{'\n'})
 
-	// Seek to the beginning of the last chunk
-	f.Seek(readOffset, 0)
-
-	decoder := json.NewDecoder(f)
-	var record TranscriptRecord
-	for {
-		if err := decoder.Decode(&record); err != nil {
-			break // EOF or invalid JSON
+	// Process lines from the end to find metadata
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := bytes.TrimSpace(lines[i])
+		if len(line) == 0 {
+			continue
+		}
+		var record TranscriptRecord
+		if err := json.Unmarshal(line, &record); err != nil {
+			continue // Skip invalid JSON
 		}
 		if record.Type == MessageTypeMetadata && record.Metadata != nil {
 			metadata[record.Metadata.Key] = record.Metadata.Value

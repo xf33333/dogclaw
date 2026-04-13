@@ -1242,7 +1242,7 @@ func (qe *QueryEngine) ResumeFromTranscript(sessionID string) error {
 			compactedSession, err := compact.DeserializeCompactedSession(compactedData)
 			if err == nil && compactedSession != nil {
 				loadedFromMetadata = true
-				// 使用压缩后的消息
+				// 使用压缩后的消息作为基础
 				qe.messages = compactedSession.Messages
 				// 计算回合数
 				turns := 0
@@ -1260,9 +1260,88 @@ func (qe *QueryEngine) ResumeFromTranscript(sessionID string) error {
 						sessionID, len(qe.messages), compactedSession.OriginalMessages, turns, compactedSession.Timestamp)
 				}
 
-				// 加载其他元数据
-				if info, err := tf.Replay(); err == nil && info.Stats.MetadataEntries > 0 {
-					qe.restoreTranscriptMetadata(tf)
+				// 加载压缩时间点之后的所有消息
+				info, err := tf.Replay()
+				if err == nil {
+					// 从压缩时间点之后的记录中提取新消息
+					for _, record := range info.Records {
+						// 只处理非侧链记录，且时间戳在压缩之后
+						if !record.IsSidechain && record.Timestamp > compactedSession.Timestamp {
+							switch record.Type {
+							case transcript.MessageTypeUser:
+								var content any = record.Content
+								// Try to parse as structured content blocks
+								var blocks []api.ContentBlockParam
+								if err := json.Unmarshal([]byte(record.Content), &blocks); err == nil && len(blocks) > 0 {
+									content = blocks
+								}
+								msg := api.MessageParam{
+									Role:    "user",
+									Content: content,
+								}
+								qe.messages = append(qe.messages, msg)
+
+							case transcript.MessageTypeAssistant:
+								var contentBlocks []api.ContentBlockParam
+
+								// Try to parse structured content
+								var blocks []api.ContentBlockParam
+								if record.Content != "" {
+									if err := json.Unmarshal([]byte(record.Content), &blocks); err == nil && len(blocks) > 0 {
+										contentBlocks = blocks
+									} else {
+										// Plain text content
+										if record.Content != "" {
+											contentBlocks = append(contentBlocks, api.ContentBlockParam{
+												Type: "text",
+												Text: record.Content,
+											})
+										}
+									}
+								}
+
+								if len(contentBlocks) > 0 {
+									msg := api.MessageParam{
+										Role:    "assistant",
+										Content: contentBlocks,
+									}
+									qe.messages = append(qe.messages, msg)
+									qe.currentTurn++
+								}
+
+							default:
+								// Handle tool results that might be standalone records
+								if record.ToolUseID != "" && record.Content != "" {
+									// This is a tool_result record
+									isError := strings.HasPrefix(record.Content, "Error:") || strings.HasPrefix(record.Content, "{\"error\"")
+									msg := api.MessageParam{
+										Role: "user",
+										Content: []api.ContentBlockParam{
+											{
+												Type:      "tool_result",
+												ToolUseID: record.ToolUseID,
+												Content: []api.ContentBlockParam{
+													{Type: "text", Text: record.Content},
+												},
+												IsError: isError,
+											},
+										},
+									}
+									qe.messages = append(qe.messages, msg)
+								}
+							}
+						}
+					}
+
+					// 加载其他元数据
+					if info.Stats.MetadataEntries > 0 {
+						qe.restoreTranscriptMetadata(tf)
+					}
+				}
+
+				if qe.verbose {
+					qe.logger.Debugf("[Resume] Loaded %d additional messages after compact timestamp", 
+						len(qe.messages) - len(compactedSession.Messages))
 				}
 
 				// 标记为已压缩，避免再次压缩
