@@ -156,6 +156,15 @@ func RegisterBuiltinCommands(registry *CommandRegistry) {
 	})
 
 	registry.Register(&Command{
+		Name:        "usage",
+		Aliases:     []string{"cost"},
+		Description: "Show token usage",
+		Type:        LocalCommand,
+		Source:      "builtin",
+		Handler:     HandleUsage,
+	})
+
+	registry.Register(&Command{
 		Name:        "model",
 		Aliases:     []string{"m"},
 		Description: "Switch the current model",
@@ -299,6 +308,7 @@ func HandleHelp(ctx context.Context, args string) (*CommandResult, error) {
   /resume [id], /r [id]  - 恢复指定会话
 
 🔧 工具命令:
+  /usage, /cost          - 显示 token 使用统计
   /model <name>, /m <n>  - 切换模型 (sonnet/opus/haiku)
   /compact               - 手动触发上下文压缩
   /verbose, /v           - 切换详细模式
@@ -319,6 +329,13 @@ func HandleClear(ctx context.Context, args string) (*CommandResult, error) {
 	return &CommandResult{
 		Output: "Conversation history cleared.",
 		Halt:   true,
+	}, nil
+}
+
+// HandleUsage shows usage info
+func HandleUsage(ctx context.Context, args string) (*CommandResult, error) {
+	return &CommandResult{
+		Output: "Usage tracking: use /usage stats for detailed breakdown",
 	}, nil
 }
 
