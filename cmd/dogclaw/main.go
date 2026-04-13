@@ -118,6 +118,7 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Options:")
 	fmt.Println("  --config <path>, -c <path>  Path to custom configuration file")
+	fmt.Println("  --multi-project, -m          Enable multi-project mode (use current dir as workspace)")
 	fmt.Println("  --compact                    Compact the most recent session and exit")
 	fmt.Println("  --version                    Show version information")
 	fmt.Println()
@@ -149,12 +150,15 @@ func main() {
 		}
 	}
 
-	// Check for --compact flag
+	// Check for --compact and --multi-project flags
 	var compactMode bool
+	var multiProjectMode bool
 	var remainingArgs []string
 	for _, arg := range os.Args[1:] {
 		if arg == "--compact" {
 			compactMode = true
+		} else if arg == "--multi-project" || arg == "-m" {
+			multiProjectMode = true
 		} else {
 			remainingArgs = append(remainingArgs, arg)
 		}
@@ -293,12 +297,12 @@ func main() {
 	case ModeAgent:
 		setupSignalHandler(nil)
 		fmt.Println("🤖 Starting in AGENT mode (CLI communication)...")
-		runAgent(cfg, settings)
+		runAgent(cfg, settings, multiProjectMode)
 	case ModeGateway:
 		stopChan := make(chan os.Signal, 12)
 		setupSignalHandler(stopChan)
 		fmt.Println("🌐 Starting in GATEWAY mode (channel communication)...")
-		runGateway(cfg, settings, stopChan)
+		runGateway(cfg, settings, stopChan, multiProjectMode)
 	case ModeOnboard:
 		setupSignalHandler(nil)
 		fmt.Println("🚀 Starting in ONBOARD mode (setup)...")
@@ -310,7 +314,7 @@ func main() {
 }
 
 // runAgent starts the agent in CLI interactive mode
-func runAgent(cfg *config.Config, settings *config.Settings) {
+func runAgent(cfg *config.Config, settings *config.Settings, multiProjectMode bool) {
 	// 检查是否需要重启，如果有标志文件则删除
 	restartFlagPath := getRestartFlagPath()
 	if _, err := os.Stat(restartFlagPath); err == nil {
@@ -334,7 +338,7 @@ func runAgent(cfg *config.Config, settings *config.Settings) {
 	registry := channel.NewRegistry()
 	registry.Register("cli", cli.NewChannel())
 
-	engineFactory := newEngineFactory(cfg, settings, registry)
+	engineFactory := newEngineFactory(cfg, settings, registry, multiProjectMode)
 	qe := engineFactory("cli")
 
 	// Try to resume the most recent session automatically
@@ -405,11 +409,29 @@ func buildTools(registry *channel.Registry) []types.Tool {
 }
 
 // newEngineFactory creates a factory function for building QueryEngine instances
-func newEngineFactory(cfg *config.Config, settings *config.Settings, registry *channel.Registry) func(channelName string) *query.QueryEngine {
+func newEngineFactory(cfg *config.Config, settings *config.Settings, registry *channel.Registry, multiProjectMode bool) func(channelName string) *query.QueryEngine {
 	return func(channelName string) *query.QueryEngine {
 		client := api.NewClient(cfg.APIKey, cfg.Model, cfg.BaseURL, cfg.Provider)
 		toolList := buildTools(registry)
-		cwd, _ := os.Getwd()
+
+		// Determine working directory based on multiProjectMode
+		var cwd string
+		if multiProjectMode {
+			// Multi-project mode: use current directory as workspace
+			cwd, _ = os.Getwd()
+		} else {
+			// Single-project mode: use ~/.dogclaw/workspace as workspace
+			home, err := os.UserHomeDir()
+			if err == nil {
+				cwd = filepath.Join(home, ".dogclaw", "workspace")
+				// Ensure workspace directory exists
+				os.MkdirAll(cwd, 0755)
+			} else {
+				// Fallback to current directory if home dir can't be found
+				cwd, _ = os.Getwd()
+			}
+		}
+
 		loadedSkills, _ := skills.DiscoverSkills(cwd)
 		systemPrompt := query.BuildSystemPrompt(toolList, loadedSkills, "")
 		qe := query.NewQueryEngine(client, toolList, systemPrompt, cfg.MaxTurns)
@@ -418,6 +440,8 @@ func newEngineFactory(cfg *config.Config, settings *config.Settings, registry *c
 		qe.SetShowThinkingInLog(cfg.ShowThinkingInLog)
 		// Set channel name to isolate session history
 		qe.SetChannelName(channelName)
+		// Set working directory for project session storage
+		qe.SetWorkingDir(cwd)
 		if cfg.MaxBudgetUSD > 0 {
 			qe.SetMaxBudget(cfg.MaxBudgetUSD)
 		}
@@ -436,7 +460,7 @@ func newEngineFactory(cfg *config.Config, settings *config.Settings, registry *c
 }
 
 // runGateway starts all configured channels (gateway mode)
-func runGateway(cfg *config.Config, settings *config.Settings, stopChan <-chan os.Signal) {
+func runGateway(cfg *config.Config, settings *config.Settings, stopChan <-chan os.Signal, multiProjectMode bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -484,12 +508,12 @@ func runGateway(cfg *config.Config, settings *config.Settings, stopChan <-chan o
 	if len(channels) == 0 {
 		fmt.Println("⚠️  No channels configured for gateway mode. Configure at least one channel (e.g., gateway, QQ) in settings.")
 		fmt.Println("Falling back to agent mode...")
-		runAgent(cfg, settings)
+		runAgent(cfg, settings, multiProjectMode)
 		return
 	}
 
 	// Start cron scheduler
-	engineFactory := newEngineFactory(cfg, settings, registry)
+	engineFactory := newEngineFactory(cfg, settings, registry, multiProjectMode)
 	cronScheduler := cron.NewScheduler(engineFactory)
 	cronScheduler.Start(ctx)
 

@@ -244,6 +244,19 @@ func (qe *QueryEngine) GetChannelName() string {
 	return qe.channelName
 }
 
+// SetWorkingDir sets the working directory for project session storage
+func (qe *QueryEngine) SetWorkingDir(cwd string) {
+	qe.cwd = cwd
+	// Reinitialize history manager with new cwd if sessionID is already set
+	if qe.sessionID != "" {
+		qe.historyMgr.Init(cwd, qe.sessionID)
+	}
+	// Reinitialize skill registry with new cwd
+	if qe.skillRegistry != nil {
+		qe.skillRegistry.DiscoverAll(cwd)
+	}
+}
+
 // GetMessages returns the current message list
 func (qe *QueryEngine) GetMessages() []api.MessageParam {
 	return qe.messages
