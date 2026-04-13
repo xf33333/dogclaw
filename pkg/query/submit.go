@@ -381,7 +381,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 					qe.logger.Debugf("[Auto-compact triggered: %d tokens >= threshold %d]", tokenCount, threshold)
 				}
 				// Notify user about compression
-				compactionMsg := fmt.Sprintf("🔄 正在压缩上下文... (%d 条消息, %d tokens)", 
+				compactionMsg := fmt.Sprintf("🔄 正在压缩上下文... (%d 条消息, %d tokens)",
 					len(qe.messages), tokenCount)
 				if qe.TextCallback != nil {
 					qe.TextCallback(compactionMsg)
@@ -395,7 +395,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 					qe.messages = compact.ApplyCompactResult(qe.messages, result)
 					qe.compactTracker.Compacted = true
 					qe.compactTracker.TurnCounter++
-					
+
 					// Notify user about compression result
 					compactionResult := fmt.Sprintf("✅ 上下文压缩完成！%d 条 → %d 条, %d tokens → %d tokens",
 						result.OriginalMessageCount, result.CompactedMessageCount,
@@ -404,7 +404,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 						qe.TextCallback(compactionResult)
 					}
 					qe.logger.Info(compactionResult)
-					
+
 					// Save the compacted session to transcript metadata
 					_ = qe.saveCompactedSession(result)
 				}
@@ -417,18 +417,6 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 				if isBlocking {
 					return fmt.Errorf("context window is full (blocking limit reached). Please start a new conversation.")
 				}
-			}
-		}
-
-		// Check if snip is needed (aggressive message count reduction)
-		if qe.snipConfig.Enabled {
-			snipResult := compact.SnipHistory(qe.messages, qe.snipConfig)
-			if snipResult != nil {
-				if qe.verbose {
-					qe.logger.Debugf("[Snip: removed %d messages, %d remaining]",
-						snipResult.SnippedCount, len(snipResult.Remaining))
-				}
-				qe.messages = snipResult.Remaining
 			}
 		}
 
@@ -837,7 +825,7 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 					qe.logger.Infof("[Auto-compact triggered: %d tokens >= threshold %d]", tokenCount, threshold)
 				}
 				// Notify user about compression
-				compactionMsg := fmt.Sprintf("🔄 正在压缩上下文... (%d 条消息, %d tokens)", 
+				compactionMsg := fmt.Sprintf("🔄 正在压缩上下文... (%d 条消息, %d tokens)",
 					len(qe.messages), tokenCount)
 				if qe.TextCallback != nil {
 					qe.TextCallback(compactionMsg)
@@ -851,7 +839,7 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 					qe.messages = compact.ApplyCompactResult(qe.messages, result)
 					qe.compactTracker.Compacted = true
 					qe.compactTracker.TurnCounter++
-					
+
 					// Notify user about compression result
 					compactionResult := fmt.Sprintf("✅ 上下文压缩完成！%d 条 → %d 条, %d tokens → %d tokens",
 						result.OriginalMessageCount, result.CompactedMessageCount,
@@ -860,7 +848,7 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 						qe.TextCallback(compactionResult)
 					}
 					qe.logger.Info(compactionResult)
-					
+
 					// Save the compacted session to transcript metadata
 					_ = qe.saveCompactedSession(result)
 				}
@@ -872,18 +860,6 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 				if isBlocking {
 					return fmt.Errorf("context window is full (blocking limit reached). Please start a new conversation.")
 				}
-			}
-		}
-
-		// Check if snip is needed
-		if qe.snipConfig.Enabled {
-			snipResult := compact.SnipHistory(qe.messages, qe.snipConfig)
-			if snipResult != nil {
-				if qe.verbose {
-					qe.logger.Debugf("[Snip: removed %d messages, %d remaining]",
-						snipResult.SnippedCount, len(snipResult.Remaining))
-				}
-				qe.messages = snipResult.Remaining
 			}
 		}
 
@@ -1348,13 +1324,8 @@ func (qe *QueryEngine) GetLastAssistantText() string {
 	return ""
 }
 
-// tryRecoverFromContextExceeded handles context_length_exceeded errors with a
-// tiered recovery strategy:
-//
-//	Tier 1 – LLM-assisted compact
-//	Tier 2 – Aggressive snip (keep last N messages)
-//	Tier 3 – Hard reset (only keep the very last user message)
-//
+// tryRecoverFromContextExceeded handles context_length_exceeded errors
+// Tries LLM-assisted compact only
 // Returns (recovered=true, nil) on success, (recovered=false, err) on failure.
 func (qe *QueryEngine) tryRecoverFromContextExceeded(ctx context.Context, err error) (bool, error) {
 	var ctxErr *api.ContextLengthExceededError
@@ -1364,10 +1335,10 @@ func (qe *QueryEngine) tryRecoverFromContextExceeded(ctx context.Context, err er
 
 	qe.logger.Infof("[⚠️  Context length exceeded detected (HTTP %d)]", ctxErr.StatusCode)
 
-	// --- Tier 1: LLM-assisted compact ---
+	// --- LLM-assisted compact ---
 	if qe.compactConfig.Enabled && len(qe.messages) >= 4 {
 		if qe.verbose {
-			qe.logger.Infof("[🔄 Recovery Tier 1: LLM-assisted compact]")
+			qe.logger.Infof("[🔄 Recovery: LLM-assisted compact]")
 		}
 		fallbackConfig := &compact.AutoCompactConfig{
 			Enabled:            qe.compactConfig.Enabled,
@@ -1390,36 +1361,9 @@ func (qe *QueryEngine) tryRecoverFromContextExceeded(ctx context.Context, err er
 			_ = qe.saveCompactedSession(result)
 			return true, nil
 		}
-		qe.logger.Warnf("[⚠️ Compact recovery failed: %v, falling back to Tier 2]", compactErr)
+		qe.logger.Warnf("[⚠️ Compact recovery failed: %v]", compactErr)
 	}
-
-	// --- Tier 2: Aggressive snip ---
-	tier2Preserve := 4
-	if len(qe.messages) > tier2Preserve {
-		if qe.verbose {
-			qe.logger.Debugf("[🔄 Recovery Tier 2: Aggressive snip – keeping last %d messages (%d total)",
-				tier2Preserve, len(qe.messages))
-		}
-		qe.messages = qe.messages[len(qe.messages)-tier2Preserve:]
-		return true, nil
-	}
-
-	// --- Tier 3: Hard reset ---
-	if qe.verbose {
-		qe.logger.Infof("[🔄 Recovery Tier 3: Hard reset – dropping conversation history]\n")
-	}
-	if len(qe.messages) >= 2 {
-		lastMsg := qe.messages[len(qe.messages)-1]
-		if lastMsg.Role == "user" {
-			qe.messages = []api.MessageParam{lastMsg}
-		} else {
-			qe.messages = make([]api.MessageParam, 0)
-		}
-	} else {
-		qe.messages = make([]api.MessageParam, 0)
-	}
-	// Hard reset succeeded, return recovered=true to let caller retry
-	return true, nil
+	return false, nil
 }
 
 // tryRecoverFromInvalidMaxTokens handles incorrect max_tokens settings by
@@ -1467,12 +1411,11 @@ func isTimeoutError(err error) bool {
 }
 
 // tryRecoverFromTimeout handles context deadline exceeded errors by reducing
-// context size (snip/compact) and allowing the caller to retry.
+// context size using compact and allowing the caller to retry.
 //
 // Recovery strategy:
-//   - Try snip first (fast, no API call needed)
-//   - If snip isn't viable and compact is enabled, try compact
-//   - If both fail or aren't applicable, return unrecoverable
+//   - Try compact (if enabled)
+//   - If compact fails or isn't applicable, return unrecoverable
 //
 // Returns (recovered=true, nil) on success, (recovered=false, err) on failure.
 func (qe *QueryEngine) tryRecoverFromTimeout(ctx context.Context, err error) (bool, error) {
@@ -1488,24 +1431,13 @@ func (qe *QueryEngine) tryRecoverFromTimeout(ctx context.Context, err error) (bo
 		qe.logger.Infof("[Current context: %d messages]", len(qe.messages))
 	}
 
-	// Step 0: Handle zero-message timeouts (nothing to snip/compact)
+	// Handle zero-message timeouts (nothing to compact)
 	if len(qe.messages) == 0 {
 		qe.logger.Debug("[⚠️  Timeout on empty context — nothing to reduce]")
 		return false, nil
 	}
 
-	// Step 1: Aggressive snip — keep only last few messages
-	preserveCount := 5
-	if len(qe.messages) > preserveCount {
-		if qe.verbose {
-			qe.logger.Debugf("[🔄 Timeout recovery: Snip — keeping last %d messages (%d total)",
-				preserveCount, len(qe.messages))
-		}
-		qe.messages = qe.messages[len(qe.messages)-preserveCount:]
-		return true, nil
-	}
-
-	// Step 2: If snip didn't remove enough, try compact (if feasible)
+	// Try compact (if feasible)
 	if qe.compactConfig.Enabled && len(qe.messages) >= 6 {
 		if qe.verbose {
 			qe.logger.Infof("[🔄 Timeout recovery: LLM-assisted compact (note: this requires another API call)]\n")
@@ -1532,22 +1464,7 @@ func (qe *QueryEngine) tryRecoverFromTimeout(ctx context.Context, err error) (bo
 		}
 	}
 
-	// Step 3: Hard reset - drop conversation history, keep only last user message if present
-	// This guarantees recovery so the turn can retry with fresh context.
-	if qe.verbose {
-		qe.logger.Infof("[🔄 Timeout recovery: Hard reset – clearing conversation history]\n")
-	}
-	if len(qe.messages) >= 2 {
-		lastMsg := qe.messages[len(qe.messages)-1]
-		if lastMsg.Role == "user" {
-			qe.messages = []api.MessageParam{lastMsg}
-		} else {
-			qe.messages = make([]api.MessageParam, 0)
-		}
-	} else {
-		qe.messages = make([]api.MessageParam, 0)
-	}
-	return true, nil
+	return false, nil
 }
 
 // buildToolCallSummary creates a human-readable summary of a tool call with Markdown formatting.

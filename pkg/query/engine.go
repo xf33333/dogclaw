@@ -45,7 +45,6 @@ type QueryEngine struct {
 	verbose        bool
 	compactConfig  *compact.AutoCompactConfig
 	compactTracker *compact.AutoCompactTracker
-	snipConfig     *compact.SnipConfig
 	cwd            string
 	sessionID      string
 	channelName    string // 用于区分不同 channel 的会话（例如 "qq", "weixin", "cli"）
@@ -185,7 +184,6 @@ func NewQueryEngine(client *api.Client, tools []types.Tool, systemPrompt string,
 		currentTurn:    0,
 		compactConfig:  compact.DefaultAutoCompactConfig(),
 		compactTracker: &compact.AutoCompactTracker{},
-		snipConfig:     compact.DefaultSnipConfig(),
 		cwd:            cwd,
 		historyMgr:     hm,
 		cmdRegistry:    cmdRegistry,
@@ -392,38 +390,6 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 			}
 		}
 
-	case "snip":
-		_, args := slash.ParseCommand(input)
-		args = strings.TrimSpace(args)
-		if args == "" {
-			snipResult := compact.SnipHistory(qe.messages, qe.snipConfig)
-			if snipResult != nil {
-				qe.messages = snipResult.Remaining
-				msg := fmt.Sprintf("Snipped %d messages, %d remaining", snipResult.SnippedCount, len(snipResult.Remaining))
-				qe.lastAssistantText = msg
-				qe.logger.Infof(msg)
-			} else {
-				qe.lastAssistantText = "No snip needed"
-				qe.logger.Info("No snip needed")
-			}
-		} else {
-			switch strings.ToLower(args) {
-			case "on", "enable":
-				qe.snipConfig.Enabled = true
-				qe.lastAssistantText = "Snip enabled"
-				qe.logger.Info("Snip enabled")
-			case "off", "disable":
-				qe.snipConfig.Enabled = false
-				qe.lastAssistantText = "Snip disabled"
-				qe.logger.Info("Snip disabled")
-			case "status":
-				msg := fmt.Sprintf("Snip: enabled=%v, max_messages=%d, preserve=%d",
-					qe.snipConfig.Enabled, qe.snipConfig.MaxMessages, qe.snipConfig.PreserveCount)
-				qe.lastAssistantText = msg
-				qe.logger.Infof(msg)
-			}
-		}
-
 	case "showtools":
 		_, args := slash.ParseCommand(input)
 		args = strings.TrimSpace(args)
@@ -575,14 +541,14 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 			cmd.Dir = qe.cwd
 			output, err := cmd.CombinedOutput()
 			outputStr := strings.TrimSpace(string(output))
-			
+
 			var result string
 			if err != nil {
 				result = fmt.Sprintf("**Shell**\n\ncommand: `%s`\n\noutput:\n%s\n\nerror: %v", args, outputStr, err)
 			} else {
 				result = fmt.Sprintf("**Shell**\n\ncommand: `%s`\n\noutput:\n%s", args, outputStr)
 			}
-			
+
 			qe.lastAssistantText = result
 			qe.logger.Info(result)
 		}
@@ -1004,7 +970,6 @@ func (qe *QueryEngine) SetSettings(settings *config.Settings) {
 	// Apply settings to engine fields
 	if settings != nil {
 		qe.compactConfig = settings.ToAutoCompactConfig()
-		qe.snipConfig = settings.ToSnipConfig()
 		if settings.MaxContextLength > 0 {
 			qe.SetMaxContextLength(settings.MaxContextLength)
 		}
@@ -1064,12 +1029,6 @@ func (qe *QueryEngine) handleSettingCommand() string {
 	sb.WriteString(fmt.Sprintf("  • Threshold: %.0f%%\n", qe.compactConfig.ThresholdRatio*100))
 	sb.WriteString(fmt.Sprintf("  • Warning: %.0f%%\n", qe.compactConfig.WarningRatio*100))
 	sb.WriteString(fmt.Sprintf("  • Max Context Tokens: %d\n", qe.compactConfig.MaxContextTokens))
-
-	// Snip settings
-	sb.WriteString("\n✂️  Snip:\n")
-	sb.WriteString(fmt.Sprintf("  • Enabled: %v\n", qe.snipConfig.Enabled))
-	sb.WriteString(fmt.Sprintf("  • Max Messages: %d\n", qe.snipConfig.MaxMessages))
-	sb.WriteString(fmt.Sprintf("  • Preserve Count: %d\n", qe.snipConfig.PreserveCount))
 
 	// Heartbeat
 	sb.WriteString("\n💓 Heartbeat:\n")
@@ -1386,15 +1345,6 @@ func (qe *QueryEngine) GetFastModeModel() string {
 	return qe.modelName
 }
 
-// ForceSnip triggers an immediate snip operation
-func (qe *QueryEngine) ForceSnip() *compact.SnipResult {
-	result := compact.SnipHistory(qe.messages, qe.snipConfig)
-	if result != nil {
-		qe.messages = result.Remaining
-	}
-	return result
-}
-
 // NeedsRestart returns whether the program needs to be restarted
 func (qe *QueryEngine) NeedsRestart() bool {
 	return qe.needsRestart
@@ -1632,17 +1582,6 @@ func (qe *QueryEngine) autoCompactAfterResume() {
 					qe.logger.Warn("[Resume] Context blocking limit reached, will need compaction before next turn")
 				}
 			}
-		}
-	}
-
-	// 同时检查是否需要 snip (更激进的消息数裁剪)
-	if qe.snipConfig.Enabled {
-		snipResult := compact.SnipHistory(qe.messages, qe.snipConfig)
-		if snipResult != nil && snipResult.SnippedCount > 0 {
-			if qe.verbose {
-				qe.logger.Debugf("[Resume] Snip: removed %d messages, %d remaining", snipResult.SnippedCount, len(snipResult.Remaining))
-			}
-			qe.messages = snipResult.Remaining
 		}
 	}
 }

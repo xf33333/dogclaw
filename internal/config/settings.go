@@ -54,8 +54,8 @@ type ChannelSettings struct {
 
 // GatewaySettings holds configuration for the gateway HTTP server
 type GatewaySettings struct {
-	Enabled bool   `json:"enabled"` // 是否启用 gateway HTTP 服务器
-	Port    int    `json:"port"`    // HTTP 服务器监听端口，默认 10086
+	Enabled bool `json:"enabled"` // 是否启用 gateway HTTP 服务器
+	Port    int  `json:"port"`    // HTTP 服务器监听端口，默认 10086
 }
 
 // Settings holds user's persistent configuration stored in ~/.docclaw/setting.json
@@ -80,13 +80,10 @@ type Settings struct {
 	// AutoCompact configuration (LLM-assisted context compression)
 	AutoCompact *AutoCompactSettings `json:"autoCompact,omitempty"`
 
-	// Snip configuration (aggressive message snipping)
-	Snip *SnipSettings `json:"snip,omitempty"`
-
 	// Other parameters
 	MaxTurns             int     `json:"maxTurns"`
-	MaxTokens            int     `json:"maxTokens"`            // 单次响应最大 token 数
-	MaxContextLength     int     `json:"maxContextLength"`     // 最大上下文长度（对话历史总 token 数）
+	MaxTokens            int     `json:"maxTokens"`        // 单次响应最大 token 数
+	MaxContextLength     int     `json:"maxContextLength"` // 最大上下文长度（对话历史总 token 数）
 	MaxBudgetUSD         float64 `json:"maxBudgetUSD"`
 	PermissionMode       string  `json:"permissionMode"`
 	Verbose              bool    `json:"verbose"`
@@ -99,17 +96,10 @@ type Settings struct {
 
 // AutoCompactSettings holds configuration for LLM-assisted context compression
 type AutoCompactSettings struct {
-	Enabled            bool    `json:"enabled"`            // 是否启用自动压缩
-	ThresholdRatio     float64 `json:"thresholdRatio"`     // 触发压缩的上下文比例（默认 0.75）
-	WarningRatio       float64 `json:"warningRatio"`       // 显示警告的上下文比例（默认 0.65）
-	MaxContextTokens   int     `json:"maxContextTokens"`   // 阻塞前的最大上下文 token 数
-}
-
-// SnipSettings holds configuration for aggressive message snipping
-type SnipSettings struct {
-	Enabled       bool `json:"enabled"`       // 是否启用激进裁剪
-	MaxMessages   int  `json:"maxMessages"`   // 触发裁剪的最大消息数（默认 50）
-	PreserveCount int  `json:"preserveCount"` // 保留的最近消息数（默认 6）
+	Enabled          bool    `json:"enabled"`          // 是否启用自动压缩
+	ThresholdRatio   float64 `json:"thresholdRatio"`   // 触发压缩的上下文比例（默认 0.75）
+	WarningRatio     float64 `json:"warningRatio"`     // 显示警告的上下文比例（默认 0.65）
+	MaxContextTokens int     `json:"maxContextTokens"` // 阻塞前的最大上下文 token 数
 }
 
 // MCPSettings holds MCP (Model Context Protocol) configuration
@@ -166,11 +156,6 @@ func DefaultSettings() *Settings {
 			ThresholdRatio:   0.75, // 75% of context window
 			WarningRatio:     0.65, // 65% warning
 			MaxContextTokens: 190000,
-		},
-		Snip: &SnipSettings{
-			Enabled:       false, // Default disabled, prefer LLM compression
-			MaxMessages:   50,
-			PreserveCount: 6,
 		},
 		MaxTurns:             1000,
 		MaxTokens:            8192,
@@ -330,17 +315,5 @@ func (s *Settings) ToAutoCompactConfig() *compact.AutoCompactConfig {
 		WarningRatio:       s.AutoCompact.WarningRatio,
 		MaxContextTokens:   s.AutoCompact.MaxContextTokens,
 		ModelContextWindow: s.MaxContextLength,
-	}
-}
-
-// ToSnipConfig converts SnipSettings to compact.SnipConfig
-func (s *Settings) ToSnipConfig() *compact.SnipConfig {
-	if s.Snip == nil {
-		return compact.DefaultSnipConfig()
-	}
-	return &compact.SnipConfig{
-		Enabled:       s.Snip.Enabled,
-		MaxMessages:   s.Snip.MaxMessages,
-		PreserveCount: s.Snip.PreserveCount,
 	}
 }
