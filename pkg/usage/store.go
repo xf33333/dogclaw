@@ -32,7 +32,6 @@ type UsageStats struct {
 	ReasoningOutput    int     `json:"reasoning_output"`
 	TotalTokens        int     `json:"total_tokens"`
 	CallCount          int     `json:"call_count"`
-	Cost               float64 `json:"cost"`
 }
 
 // ModelUsageStats represents usage statistics per model
@@ -198,20 +197,9 @@ func AggregateStats(records []UsageRecord) map[string]*UsageStats {
 		stats.CallCount++
 	}
 
-	// Calculate total tokens and cost for each model
-	for model, stats := range modelStats {
+	// Calculate total tokens for each model
+	for _, stats := range modelStats {
 		stats.TotalTokens = stats.InputTokens + stats.OutputTokens + stats.CacheRead + stats.CacheCreation
-		pricing := GetPricingForModel(model)
-		// Create a temporary AccumulatedUsage to calculate cost
-		acc := &AccumulatedUsage{
-			TotalInput:         stats.InputTokens,
-			TotalOutput:        stats.OutputTokens,
-			TotalCacheRead:     stats.CacheRead,
-			TotalCacheCreation: stats.CacheCreation,
-			TotalReasoningInput: stats.ReasoningInput,
-			TotalReasoningOutput: stats.ReasoningOutput,
-		}
-		stats.Cost = acc.CalculateCost(pricing)
 	}
 
 	return modelStats
@@ -282,7 +270,6 @@ func (s *UsageStore) GetTimeRangeStats() ([]TimeRangeStats, error) {
 			totalStats.ReasoningOutput += stats.ReasoningOutput
 			totalStats.CallCount += stats.CallCount
 			totalStats.TotalTokens += stats.TotalTokens
-			totalStats.Cost += stats.Cost
 		}
 
 		result = append(result, TimeRangeStats{

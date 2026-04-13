@@ -461,9 +461,6 @@ func newEngineFactory(cfg *config.Config, settings *config.Settings, registry *c
 		qe.SetChannelName(channelName)
 		// Set working directory for project session storage
 		qe.SetWorkingDir(cwd)
-		if cfg.MaxBudgetUSD > 0 {
-			qe.SetMaxBudget(cfg.MaxBudgetUSD)
-		}
 		if cfg.MaxTokens > 0 {
 			qe.SetMaxTokens(cfg.MaxTokens)
 		}

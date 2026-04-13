@@ -62,10 +62,6 @@ type QueryEngine struct {
 	usageTracker *usage.AccumulatedUsage
 	modelName    string
 
-	// Budget control
-	maxBudgetUSD float64
-	currentCost  float64
-
 	// Thinking config
 	thinkingConfig *thinking.Config
 
@@ -194,7 +190,6 @@ func NewQueryEngine(client *api.Client, tools []types.Tool, systemPrompt string,
 		skillRegistry:  skillRegistry,
 		usageTracker:   usageTracker,
 		modelName:      client.Model,
-		maxBudgetUSD:   0, // unlimited
 		thinkingConfig: thinking.DefaultConfig(),
 		fastModeManager: func() *fastmode.Manager {
 			m := fastmode.NewManager(true)
@@ -982,16 +977,6 @@ func (qe *QueryEngine) GetSkillRegistry() *slash.SkillRegistry {
 	return qe.skillRegistry
 }
 
-// SetMaxBudget sets the maximum budget in USD
-func (qe *QueryEngine) SetMaxBudget(usd float64) {
-	qe.maxBudgetUSD = usd
-}
-
-// GetCurrentCost returns the current session cost
-func (qe *QueryEngine) GetCurrentCost() float64 {
-	return qe.currentCost
-}
-
 // SetModel switches the current model
 func (qe *QueryEngine) SetModel(model string) {
 	qe.modelName = model
@@ -1064,13 +1049,6 @@ func (qe *QueryEngine) handleSettingCommand() string {
 	sb.WriteString(fmt.Sprintf("  • Verbose: %v\n", qe.verbose))
 	sb.WriteString(fmt.Sprintf("  • Show Tool Usage in Reply: %v\n", qe.showToolUsageInReply))
 	sb.WriteString(fmt.Sprintf("  • Show Thinking in Log: %v\n", qe.showThinkingInLog))
-
-	// Budget
-	budgetStr := "unlimited"
-	if qe.maxBudgetUSD > 0 {
-		budgetStr = fmt.Sprintf("$%.2f (current: $%.4f)", qe.maxBudgetUSD, qe.currentCost)
-	}
-	sb.WriteString(fmt.Sprintf("  • Budget: %s\n", budgetStr))
 
 	// Auto-compact settings
 	sb.WriteString("\n🔄 Auto-Compact:\n")

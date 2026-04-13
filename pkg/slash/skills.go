@@ -283,7 +283,6 @@ func HandleUsageCommand(ctx context.Context, args string, tracker *usage.Accumul
 				sb.WriteString(fmt.Sprintf("    Cache W: %s tokens\n", usage.FormatTokens(modelStats.Stats.CacheCreation)))
 			}
 			sb.WriteString(fmt.Sprintf("    Total:   %s tokens\n", usage.FormatTokens(modelStats.Stats.TotalTokens)))
-			sb.WriteString(fmt.Sprintf("    Cost:    %s\n", usage.FormatCost(modelStats.Stats.Cost)))
 		}
 
 		// Show total
@@ -297,13 +296,11 @@ func HandleUsageCommand(ctx context.Context, args string, tracker *usage.Accumul
 			sb.WriteString(fmt.Sprintf("    Cache W: %s tokens\n", usage.FormatTokens(tr.Total.CacheCreation)))
 		}
 		sb.WriteString(fmt.Sprintf("    Total:   %s tokens\n", usage.FormatTokens(tr.Total.TotalTokens)))
-		sb.WriteString(fmt.Sprintf("    Cost:    %s\n", usage.FormatCost(tr.Total.Cost)))
 		sb.WriteString("\n")
 	}
 
 	// Also show current session stats if available
 	if tracker != nil && tracker.TotalTokens() > 0 {
-		pricing := usage.GetPricingForModel("sonnet")
 		sb.WriteString("--- Current Session ---\n")
 		sb.WriteString(fmt.Sprintf("  Input tokens:     %s\n", usage.FormatTokens(tracker.TotalInput)))
 		sb.WriteString(fmt.Sprintf("  Output tokens:    %s\n", usage.FormatTokens(tracker.TotalOutput)))
@@ -315,7 +312,6 @@ func HandleUsageCommand(ctx context.Context, args string, tracker *usage.Accumul
 		}
 		sb.WriteString(fmt.Sprintf("  Total tokens:     %s\n", usage.FormatTokens(tracker.TotalTokens())))
 		sb.WriteString(fmt.Sprintf("  Turns:            %d\n", tracker.Turns))
-		sb.WriteString(fmt.Sprintf("  Estimated cost:   %s\n", tracker.FormatCost(pricing)))
 	}
 
 	return &CommandResult{Output: sb.String()}, nil

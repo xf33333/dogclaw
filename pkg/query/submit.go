@@ -563,15 +563,6 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 				CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
 			}
 			qe.usageTracker.Add(tokenUsage)
-
-			// Update cost
-			pricing := usage.GetPricingForModel(qe.modelName)
-			qe.currentCost = qe.usageTracker.CalculateCost(pricing)
-
-			// Check budget
-			if qe.maxBudgetUSD > 0 && qe.currentCost >= qe.maxBudgetUSD {
-				return fmt.Errorf("reached maximum budget ($%.2f)", qe.maxBudgetUSD)
-			}
 		}
 
 		// Build assistant message content blocks
@@ -1043,15 +1034,6 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 				CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
 			}
 			qe.usageTracker.Add(tokenUsage)
-
-			// Update cost
-			pricing := usage.GetPricingForModel(qe.modelName)
-			qe.currentCost = qe.usageTracker.CalculateCost(pricing)
-
-			// Check budget
-			if qe.maxBudgetUSD > 0 && qe.currentCost >= qe.maxBudgetUSD {
-				return fmt.Errorf("reached maximum budget ($%.2f)", qe.maxBudgetUSD)
-			}
 		}
 
 		var assistantContent []api.ContentBlockParam
