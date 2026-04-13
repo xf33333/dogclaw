@@ -192,19 +192,25 @@ func NewLogger(cfg *Config) *logrus.Logger {
 		if err := os.MkdirAll(cfg.LogDir, 0755); err != nil {
 			logger.Warnf("Failed to create log dir %s: %v, using stderr", cfg.LogDir, err)
 		} else {
-			// Build log filename
-			var logFile string
 			if cfg.DailyRotate {
-				logFile = filepath.Join(cfg.LogDir, cfg.FilenamePrefix+"-"+time.Now().Format("2006-01-02")+".log")
+				// 使用按天轮转的日志写入器
+				writer, err := NewDailyRotatingWriter(cfg.LogDir, cfg.FilenamePrefix)
+				if err != nil {
+					logger.Warnf("Failed to create daily rotating log writer: %v, using stderr", err)
+				} else {
+					logger.SetOutput(writer)
+					// 注意：不要设置 output，因为我们已经通过 SetOutput 设置了 writer
+					return logger
+				}
 			} else {
-				logFile = filepath.Join(cfg.LogDir, cfg.FilenamePrefix+".log")
-			}
-
-			f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-			if err != nil {
-				logger.Warnf("Failed to open log file %s: %v, using stderr", logFile, err)
-			} else {
-				output = f
+				// 不使用按天轮转，直接打开单个文件
+				logFile := filepath.Join(cfg.LogDir, cfg.FilenamePrefix+".log")
+				f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+				if err != nil {
+					logger.Warnf("Failed to open log file %s: %v, using stderr", logFile, err)
+				} else {
+					output = f
+				}
 			}
 		}
 	}
