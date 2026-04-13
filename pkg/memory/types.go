@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -472,54 +471,46 @@ const (
 	autoMemEntrypoint = "MEMORY.md"
 )
 
-// GetAutoMemPath returns the auto-memory directory path for the current project.
-// The path is derived from the CWD, sanitized into a directory name.
-var (
-	autoMemPathOnce sync.Once
-	autoMemPathVal  string
-)
+// GetAutoMemPath returns the auto-memory directory path for the given working directory.
+// If workingDir is empty, it uses os.Getwd().
+// The path is derived from the working directory, sanitized into a directory name.
+func GetAutoMemPath(workingDir ...string) string {
+	var cwd string
+	if len(workingDir) > 0 && workingDir[0] != "" {
+		cwd = workingDir[0]
+	} else {
+		cwd, _ = os.Getwd()
+	}
 
-func GetAutoMemPath() string {
-	autoMemPathOnce.Do(func() {
-		if override := os.Getenv("CLAUDE_COWORK_MEMORY_PATH_OVERRIDE"); override != "" {
-			autoMemPathVal = filepath.Clean(override) + string(filepath.Separator)
-			return
-		}
+	if override := os.Getenv("CLAUDE_COWORK_MEMORY_PATH_OVERRIDE"); override != "" {
+		return filepath.Clean(override) + string(filepath.Separator)
+	}
 
-		projectsDir := filepath.Join(GetMemoryBaseDir(), "projects")
-		cwd, _ := os.Getwd()
-		sanitized := sanitizePath(cwd)
-		autoMemPathVal = filepath.Join(projectsDir, sanitized, autoMemDirname) + string(filepath.Separator)
-	})
-	return autoMemPathVal
+	projectsDir := filepath.Join(GetMemoryBaseDir(), "projects")
+	sanitized := sanitizePath(cwd)
+	return filepath.Join(projectsDir, sanitized, autoMemDirname) + string(filepath.Separator)
 }
 
-// ResetAutoMemPath resets the cached auto-memory path (useful for tests).
-func ResetAutoMemPath() {
-	autoMemPathOnce = sync.Once{}
-	autoMemPathVal = ""
-}
-
-// GetAutoMemDailyLogPath returns the dailylog file path for the given date.
-func GetAutoMemDailyLogPath(date time.Time) string {
+// GetAutoMemDailyLogPath returns the dailylog file path for the given date and working directory.
+func GetAutoMemDailyLogPath(date time.Time, workingDir ...string) string {
 	if date.IsZero() {
 		date = time.Now()
 	}
 	yyyy := date.Format("2006")
 	mm := date.Format("01")
 	dd := date.Format("02")
-	return filepath.Join(GetAutoMemPath(), "logs", yyyy, mm, yyyy+"-"+mm+"-"+dd+".md")
+	return filepath.Join(GetAutoMemPath(workingDir...), "logs", yyyy, mm, yyyy+"-"+mm+"-"+dd+".md")
 }
 
-// GetAutoMemEntrypoint returns the MEMORY.md path inside the auto-memory dir.
-func GetAutoMemEntrypoint() string {
-	return filepath.Join(GetAutoMemPath(), autoMemEntrypoint)
+// GetAutoMemEntrypoint returns the MEMORY.md path inside the auto-memory dir for the given working directory.
+func GetAutoMemEntrypoint(workingDir ...string) string {
+	return filepath.Join(GetAutoMemPath(workingDir...), autoMemEntrypoint)
 }
 
-// IsAutoMemPath checks if an absolute path is within the auto-memory directory.
-func IsAutoMemPath(absolutePath string) bool {
+// IsAutoMemPath checks if an absolute path is within the auto-memory directory for the given working directory.
+func IsAutoMemPath(absolutePath string, workingDir ...string) bool {
 	normalized := filepath.Clean(absolutePath)
-	autoPath := GetAutoMemPath()
+	autoPath := GetAutoMemPath(workingDir...)
 	return strings.HasPrefix(normalized, autoPath)
 }
 

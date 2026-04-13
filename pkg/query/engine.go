@@ -163,8 +163,8 @@ func NewQueryEngine(client *api.Client, tools []types.Tool, systemPrompt string,
 	// Initialize usage tracker
 	usageTracker := &usage.AccumulatedUsage{}
 
-	// Initialize memory system
-	memoryDir := memory.GetAutoMemPath()
+	// Initialize memory system with current cwd
+	memoryDir := memory.GetAutoMemPath(cwd)
 	memoryCompactor := compactmem.DefaultCompactionConfig()
 
 	// Initialize transcript project manager
@@ -255,6 +255,8 @@ func (qe *QueryEngine) SetWorkingDir(cwd string) {
 	if qe.skillRegistry != nil {
 		qe.skillRegistry.DiscoverAll(cwd)
 	}
+	// Update memory directory to use the new working directory
+	qe.memoryDir = memory.GetAutoMemPath(cwd)
 }
 
 // GetMessages returns the current message list
