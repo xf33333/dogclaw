@@ -311,11 +311,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 		return err
 	}
 
-	// Start heartbeat monitoring if enabled
-	if qe.IsHeartbeatEnabled() {
-		qe.StartHeartbeat(ctx)
-		defer qe.StopHeartbeat()
-	}
+
 
 	// One-time memory initialization (semantic index + compaction)
 	qe.initMemoryIndex(ctx)
@@ -334,8 +330,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 	// Record to transcript
 	qe.RecordMessageToTranscript(transcript.MessageTypeUser, "user", []byte(prompt))
 
-	// Update heartbeat after user message
-	qe.UpdateHeartbeat()
+
 
 	// Reset turn counter for per-query budget
 	qe.resetForNewQuery()
@@ -392,6 +387,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 				if err != nil {
 					qe.logger.Errorf("[Auto-compact error: %v]", err)
 				} else if result != nil {
+					
 					qe.messages = compact.ApplyCompactResult(qe.messages, result)
 					qe.compactTracker.Compacted = true
 					qe.compactTracker.TurnCounter++
@@ -458,8 +454,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 			qe.logger.Debug("dumpMessageRequest1")
 		}
 
-		// Update heartbeat before API call
-		qe.UpdateHeartbeat()
+
 
 		// Call API
 		resp, err := qe.client.SendMessage(ctx, req)
@@ -468,8 +463,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 			qe.logger.Debug("dumpMessageResponse1")
 		}
 		if err != nil {
-			// Update heartbeat on error (still activity)
-			qe.UpdateHeartbeat()
+
 			// Handle context deadline exceeded (timeout) — retry with compacted messages
 			if isTimeoutError(err) {
 				recovered, retryErr := qe.tryRecoverFromTimeout(ctx, err)
@@ -538,8 +532,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 			}
 		}
 
-		// Update heartbeat after receiving response
-		qe.UpdateHeartbeat()
+		
 
 		// Build assistant message content blocks
 		var assistantContent []api.ContentBlockParam
@@ -716,8 +709,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 			// Record tool call to transcript
 			qe.RecordToolCallToTranscript(toolUseID, toolName, inputMap)
 
-			// Update heartbeat before tool execution
-			qe.UpdateHeartbeat()
+
 
 			// Execute tool
 			toolCtx := types.ToolUseContext{
@@ -734,8 +726,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 				continue
 			}
 
-			// Update heartbeat after tool execution
-			qe.UpdateHeartbeat()
+
 
 			// Log tool result summary
 			resultStr, _ := json.Marshal(result.Data)
@@ -757,8 +748,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 			// Add tool result
 			qe.addToolResult(toolUseID, string(resultStr), result.IsError)
 
-			// Update heartbeat after adding tool result
-			qe.UpdateHeartbeat()
+
 		}
 
 		// If showToolUsageInReply is enabled, append tool usage summary to the cache for channels
@@ -787,17 +777,7 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 	// Clear any previous assistant text for this session
 	qe.lastAssistantText = ""
 
-	// Ensure API client can notify us of activity (heartbeat)
-	if qe.client != nil {
-		qe.client.OnActivity = qe.UpdateHeartbeat
-	}
 
-	// Start heartbeat monitoring.
-	// We enable it by default during RunMainLoop unless the user explicitly
-	// wants it off, but based on feedback it should be active.
-	qe.SetHeartbeatEnabled(true)
-	qe.StartHeartbeat(ctx)
-	defer qe.StopHeartbeat()
 
 	// One-time memory initialization (semantic index + compaction)
 	qe.initMemoryIndex(ctx)
@@ -807,8 +787,7 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 	for qe.currentTurn < qe.maxTurns {
 		qe.currentTurn++
 
-		// Update heartbeat at start of each turn
-		qe.UpdateHeartbeat()
+
 
 		if qe.verbose {
 			qe.logger.Infof("[Turn %d/%d]", qe.currentTurn, qe.maxTurns)
@@ -836,6 +815,7 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 				if err != nil {
 					qe.logger.Infof("[Auto-compact error: %v]", err)
 				} else if result != nil {
+					
 					qe.messages = compact.ApplyCompactResult(qe.messages, result)
 					qe.compactTracker.Compacted = true
 					qe.compactTracker.TurnCounter++
@@ -896,8 +876,7 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 			logger.Debug("dumpMessageRequest2")
 		}
 
-		// Update heartbeat before API call
-		qe.UpdateHeartbeat()
+
 
 		resp, err := qe.client.SendMessage(ctx, req)
 		if err == nil && qe.verbose {
@@ -905,8 +884,7 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 			logger.Debug("dumpMessageResponse2")
 		}
 		if err != nil {
-			// Update heartbeat on error
-			qe.UpdateHeartbeat()
+
 			// Handle context deadline exceeded (timeout) — retry with compacted messages
 			if isTimeoutError(err) {
 				recovered, retryErr := qe.tryRecoverFromTimeout(ctx, err)
@@ -966,8 +944,7 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 			}
 		}
 
-		// Update heartbeat after receiving response
-		qe.UpdateHeartbeat()
+		
 
 		var assistantContent []api.ContentBlockParam
 
@@ -1108,8 +1085,6 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 			}
 
 			result, err := tool.Call(ctx, inputMap, toolCtx, nil)
-			// Update heartbeat immediately after tool returns
-			qe.UpdateHeartbeat()
 
 			if err != nil {
 				qe.addToolResult(toolUseID, fmt.Sprintf("Error: %v", err), true)
@@ -1350,6 +1325,7 @@ func (qe *QueryEngine) tryRecoverFromContextExceeded(ctx context.Context, err er
 
 		result, compactErr := compact.CompactMessages(ctx, qe.client, qe.messages, qe.systemPrompt, fallbackConfig)
 		if compactErr == nil && result != nil {
+			
 			qe.messages = compact.ApplyCompactResult(qe.messages, result)
 			qe.compactTracker.Compacted = true
 			if qe.verbose {
@@ -1447,8 +1423,11 @@ func (qe *QueryEngine) tryRecoverFromTimeout(ctx context.Context, err error) (bo
 		compactCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
+
+
 		result, compactErr := compact.CompactMessages(compactCtx, qe.client, qe.messages, qe.systemPrompt, qe.compactConfig)
 		if compactErr == nil && result != nil {
+			
 			qe.messages = compact.ApplyCompactResult(qe.messages, result)
 			qe.compactTracker.Compacted = true
 			if qe.verbose {

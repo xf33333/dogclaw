@@ -113,14 +113,9 @@ type QueryEngine struct {
 	// prompt asking for a summary and allow one final turn before stopping.
 	queryLimitGraceMode bool
 
-	// Heartbeat mechanism
-	heartbeatEnabled  bool          // 是否启用心跳
-	heartbeatInterval time.Duration // 心跳检查间隔
-	heartbeatTimeout  time.Duration // 超时时间（超过此时间无响应则判断为中断）
-	lastActivityTime  time.Time     // 最后活动时间
-	heartbeatStopChan chan struct{} // 停止心跳的 channel
-	heartbeatMu       sync.RWMutex  // 保护心跳相关状态的锁
+	// Processing state
 	isProcessing      bool          // 当前是否有正在进行的查询
+	processingMu      sync.RWMutex  // 保护处理状态的锁
 
 	// logger is the logrus instance for structured logging
 	logger            *logrus.Logger
@@ -208,13 +203,7 @@ func NewQueryEngine(client *api.Client, tools []types.Tool, systemPrompt string,
 		transcriptProjectMgr: pm,
 		sessionManager:       sm,
 
-		// Heartbeat mechanism (disabled by default)
-		heartbeatEnabled:  false,
-		heartbeatInterval: time.Second * 30, // More frequent checks
-		heartbeatTimeout:  time.Minute * 10, // Longer timeout for rate limits
-		lastActivityTime:  time.Now(),
-		heartbeatStopChan: make(chan struct{}, 1),
-		heartbeatMu:       sync.RWMutex{},
+
 
 		// Logger
 		logger: logger,
@@ -467,6 +456,7 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 				qe.lastAssistantText = fmt.Sprintf("Compaction failed: %v", err)
 				qe.logger.Errorf("Compaction failed: %v", err)
 			} else if result != nil {
+				
 				qe.messages = compact.ApplyCompactResult(qe.messages, result)
 				qe.compactTracker.Compacted = true
 				qe.compactTracker.TurnCounter++
@@ -1045,14 +1035,6 @@ func (qe *QueryEngine) handleSettingCommand() string {
 	sb.WriteString(fmt.Sprintf("  • Warning: %.0f%%\n", qe.compactConfig.WarningRatio*100))
 	sb.WriteString(fmt.Sprintf("  • Max Context Tokens: %d\n", qe.compactConfig.MaxContextTokens))
 
-	// Heartbeat
-	sb.WriteString("\n💓 Heartbeat:\n")
-	heartbeatEnabled := func() bool {
-		qe.heartbeatMu.RLock()
-		defer qe.heartbeatMu.RUnlock()
-		return qe.heartbeatEnabled
-	}()
-	sb.WriteString(fmt.Sprintf("  • Enabled: %v\n", heartbeatEnabled))
 
 	// MCP settings
 	if qe.settings != nil && qe.settings.MCP != nil {
@@ -1101,81 +1083,17 @@ func (qe *QueryEngine) SetMaxContextLength(length int) {
 	qe.compactConfig.MaxContextTokens = int(float64(length) * 0.95)
 }
 
-// SetHeartbeatEnabled sets whether the heartbeat mechanism is enabled
-func (qe *QueryEngine) SetHeartbeatEnabled(enabled bool) {
-	qe.heartbeatMu.Lock()
-	defer qe.heartbeatMu.Unlock()
-	qe.heartbeatEnabled = enabled
-	logger.GetGlobalLogger().Infof("[heartbeat] enabled: %v", qe.heartbeatEnabled)
-}
-
-// SetHeartbeatInterval sets the heartbeat check interval
-func (qe *QueryEngine) SetHeartbeatInterval(interval time.Duration) {
-	qe.heartbeatMu.Lock()
-	defer qe.heartbeatMu.Unlock()
-	qe.heartbeatInterval = interval
-}
-
-// SetHeartbeatTimeout sets the timeout duration for heartbeat
-func (qe *QueryEngine) SetHeartbeatTimeout(timeout time.Duration) {
-	qe.heartbeatMu.Lock()
-	defer qe.heartbeatMu.Unlock()
-	qe.heartbeatTimeout = timeout
-}
-
-// UpdateHeartbeat updates the last activity timestamp
-func (qe *QueryEngine) UpdateHeartbeat() {
-	qe.heartbeatMu.Lock()
-	defer qe.heartbeatMu.Unlock()
-	qe.lastActivityTime = time.Now()
-}
-
-// StartHeartbeat starts the heartbeat monitoring goroutine
-func (qe *QueryEngine) StartHeartbeat(ctx context.Context) {
-	qe.heartbeatMu.Lock()
-	if qe.heartbeatEnabled && qe.heartbeatStopChan != nil {
-		qe.heartbeatMu.Unlock()
-		return // Already started
-	}
-	qe.heartbeatEnabled = true
-	qe.heartbeatStopChan = make(chan struct{}, 1)
-	qe.heartbeatMu.Unlock()
-
-	go qe.heartbeatLoop(ctx)
-}
-
-// StopHeartbeat stops the heartbeat monitoring goroutine
-func (qe *QueryEngine) StopHeartbeat() {
-	qe.heartbeatMu.Lock()
-	defer qe.heartbeatMu.Unlock()
-	if qe.heartbeatStopChan != nil {
-		select {
-		case qe.heartbeatStopChan <- struct{}{}:
-		default:
-		}
-		qe.heartbeatStopChan = nil
-	}
-	qe.heartbeatEnabled = false
-}
-
-// IsHeartbeatEnabled returns whether heartbeat is enabled
-func (qe *QueryEngine) IsHeartbeatEnabled() bool {
-	qe.heartbeatMu.RLock()
-	defer qe.heartbeatMu.RUnlock()
-	return qe.heartbeatEnabled
-}
-
 // SetProcessing sets whether the engine is currently processing a query
 func (qe *QueryEngine) SetProcessing(processing bool) {
-	qe.heartbeatMu.Lock()
-	defer qe.heartbeatMu.Unlock()
+	qe.processingMu.Lock()
+	defer qe.processingMu.Unlock()
 	qe.isProcessing = processing
 }
 
 // IsProcessing returns whether the engine is currently processing a query
 func (qe *QueryEngine) IsProcessing() bool {
-	qe.heartbeatMu.RLock()
-	defer qe.heartbeatMu.RUnlock()
+	qe.processingMu.RLock()
+	defer qe.processingMu.RUnlock()
 	return qe.isProcessing
 }
 
@@ -1186,136 +1104,6 @@ func (qe *QueryEngine) isLastMessageUnresponded() bool {
 	}
 	lastMsg := qe.messages[len(qe.messages)-1]
 	return lastMsg.Role == "user"
-}
-
-// GetHeartbeatStatus returns current heartbeat status information
-func (qe *QueryEngine) GetHeartbeatStatus() map[string]any {
-	qe.heartbeatMu.RLock()
-	defer qe.heartbeatMu.RUnlock()
-
-	lastActivity := qe.lastActivityTime
-	elapsed := time.Since(lastActivity)
-
-	return map[string]any{
-		"enabled":       qe.heartbeatEnabled,
-		"interval":      qe.heartbeatInterval.String(),
-		"timeout":       qe.heartbeatTimeout.String(),
-		"last_activity": lastActivity.Format(time.RFC3339),
-		"elapsed":       elapsed.String(),
-	}
-}
-
-// heartbeatLoop runs in a separate goroutine to monitor session activity
-func (qe *QueryEngine) heartbeatLoop(ctx context.Context) {
-	ticker := time.NewTicker(qe.heartbeatInterval)
-	defer ticker.Stop()
-
-	qe.logger.Infof("[Heartbeat] Started (interval: %v, timeout: %v)",
-		qe.heartbeatInterval, qe.heartbeatTimeout)
-
-	for {
-		select {
-		case <-ctx.Done():
-			qe.logger.Info("[Heartbeat] Context cancelled, stopping heartbeat")
-			return
-		case <-qe.heartbeatStopChan:
-			qe.logger.Info("[Heartbeat] Stopped by request")
-			return
-		case <-ticker.C:
-			qe.checkHeartbeat(ctx)
-		}
-	}
-}
-
-// checkHeartbeat checks if the session has been inactive for too long
-func (qe *QueryEngine) checkHeartbeat(ctx context.Context) {
-	qe.heartbeatMu.RLock()
-	enabled := qe.heartbeatEnabled
-	timeout := qe.heartbeatTimeout
-	lastActivity := qe.lastActivityTime
-	qe.heartbeatMu.RUnlock()
-
-	if !enabled {
-		return
-	}
-
-	elapsed := time.Since(lastActivity)
-
-	// Log status in verbose mode
-	if qe.verbose {
-		remaining := timeout - elapsed
-		if remaining < 0 {
-			remaining = 0
-		}
-		qe.logger.Debugf("[Heartbeat] Monitoring session: elapsed=%v, timeout=%v, remaining=%v",
-			elapsed.Truncate(time.Second), timeout, remaining.Truncate(time.Second))
-	}
-
-	if elapsed >= timeout {
-		qe.logger.Warnf("[Heartbeat] Session appears interrupted (inactive for %v), attempting to resume...", elapsed)
-
-		// Check if we are stuck in processing. If so, we might need a hard restart.
-		isStuck := qe.IsProcessing()
-		if isStuck {
-			qe.logger.Warnf("[Heartbeat] Session is still in 'isProcessing' state, but has been inactive for too long. Forcing recovery.")
-			qe.SetProcessing(false) // Force-clear processing flag to allow retry
-		}
-
-		// Try to recover from transcript
-		if err := qe.tryResumeFromHeartbeat(ctx); err != nil {
-			qe.logger.Errorf("[Heartbeat] Failed to resume session: %v", err)
-		} else {
-			qe.logger.Infof("[Heartbeat] Successfully recovered session, checking for unresponded messages...")
-
-			// If the last message is from user, retry automatically.
-			// Note: We don't check IsProcessing here because we might have forced it to false above.
-			if qe.isLastMessageUnresponded() {
-				qe.logger.Infof("[Heartbeat] Last message is unresponded, triggering automatic retry...")
-				go func() {
-					// Use a background context for automatic retry to survive original query timeout
-					bgCtx := context.Background()
-					if err := qe.RunMainLoop(bgCtx); err != nil {
-						qe.logger.Errorf("[Heartbeat] Automatic retry failed: %v", err)
-					}
-				}()
-			} else {
-				qe.logger.Infof("[Heartbeat] Successfully recovered session, continuing...")
-			}
-		}
-	}
-}
-
-// tryResumeFromHeartbeat attempts to resume a session from transcript after detected interruption
-func (qe *QueryEngine) tryResumeFromHeartbeat(ctx context.Context) error {
-	qe.logger.Info("[Heartbeat] Attempting to resume from transcript...")
-
-	// Find the most recent session for this CWD
-	if qe.transcriptProjectMgr == nil {
-		pm, err := transcript.NewProjectManager("")
-		if err != nil {
-			return fmt.Errorf("failed to create transcript manager: %w", err)
-		}
-		qe.transcriptProjectMgr = pm
-	}
-
-	sessions, err := qe.transcriptProjectMgr.ListSessions()
-	if err != nil {
-		return fmt.Errorf("failed to list sessions: %w", err)
-	}
-
-	// Find the most recent session for this cwd
-	recentSession := qe.findMostRecentSessionForCwd(sessions, qe.cwd)
-	if recentSession == "" {
-		return fmt.Errorf("no previous sessions found for current working directory")
-	}
-
-	// Resume the session
-	if err := qe.ResumeFromTranscript(recentSession); err != nil {
-		return fmt.Errorf("failed to resume session %s: %w", recentSession, err)
-	}
-
-	qe.logger.Infof("[Heartbeat] Resumed session: %s", qe.sessionID)
-	return nil
 }
 
 // SetQueryMaxTurns sets the per-query turn budget.
@@ -1446,6 +1234,9 @@ func (qe *QueryEngine) ResumeFromTranscript(sessionID string) error {
 
 	tf := qe.transcriptProjectMgr.GetTranscriptFile(sessionID, qe.cwd)
 
+	// Track if we loaded from metadata
+	var loadedFromMetadata bool
+
 	// Step 1: 优先尝试从元数据加载已压缩的会话
 	meta, err := tf.ReadMetadata()
 	if err == nil {
@@ -1453,6 +1244,7 @@ func (qe *QueryEngine) ResumeFromTranscript(sessionID string) error {
 			// 有已压缩的会话数据，直接加载
 			compactedSession, err := compact.DeserializeCompactedSession(compactedData)
 			if err == nil && compactedSession != nil {
+				loadedFromMetadata = true
 				// 使用压缩后的消息
 				qe.messages = compactedSession.Messages
 				// 计算回合数
@@ -1519,7 +1311,8 @@ func (qe *QueryEngine) ResumeFromTranscript(sessionID string) error {
 	}
 
 	// 恢复后立即检查并压缩，防止长会话立即超限
-	qe.autoCompactAfterResume()
+	// 如果是从 metadata 加载的压缩消息，跳过压缩检查
+	qe.autoCompactAfterResume(loadedFromMetadata)
 
 	return nil
 }
@@ -1558,8 +1351,17 @@ func (qe *QueryEngine) saveCompactedSession(result *compact.CompactResult) error
 
 // autoCompactAfterResume checks if the resumed session exceeds limits
 // and performs automatic compaction if needed.
-func (qe *QueryEngine) autoCompactAfterResume() {
+// skipCompactCheck: if true, skip the compaction check (e.g., when loading from metadata)
+func (qe *QueryEngine) autoCompactAfterResume(skipCompactCheck bool) {
 	if len(qe.messages) == 0 {
+		return
+	}
+
+	// 如果是从 metadata 加载的压缩消息，跳过压缩检查
+	if skipCompactCheck {
+		if qe.verbose {
+			qe.logger.Debugf("[Resume] Skipping compaction check (loaded from metadata)")
+		}
 		return
 	}
 
@@ -1571,10 +1373,12 @@ func (qe *QueryEngine) autoCompactAfterResume() {
 			if qe.verbose {
 				qe.logger.Debugf("[Resume] Auto-compact triggered: %d tokens >= threshold %d", tokenCount, threshold)
 			}
+			
 			result, err := compact.CompactMessages(context.Background(), qe.client, qe.messages, qe.systemPrompt, qe.compactConfig)
 			if err != nil {
 				qe.logger.Warnf("[Resume] CompactMessages failed: %v", err)
 			} else if result != nil {
+				
 				qe.messages = compact.ApplyCompactResult(qe.messages, result)
 				qe.compactTracker.Compacted = true
 				qe.compactTracker.TurnCounter++

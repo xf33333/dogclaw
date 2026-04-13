@@ -3,15 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"fmt"
-	"os"
-	"os/signal"
-	"path/filepath"
-	"runtime"
-	"strings"
-	"syscall"
-	"time"
-
 	"dogclaw/internal/api"
 	"dogclaw/internal/config"
 	"dogclaw/pkg/channel"
@@ -30,6 +21,13 @@ import (
 	"dogclaw/pkg/tools/skilltool"
 	"dogclaw/pkg/transcript"
 	"dogclaw/pkg/types"
+	"fmt"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"syscall"
 )
 
 // StartupMode represents the mode the program runs in
@@ -472,10 +470,7 @@ func newEngineFactory(cfg *config.Config, settings *config.Settings, registry *c
 		if cfg.MaxContextLength > 0 {
 			qe.SetMaxContextLength(cfg.MaxContextLength)
 		}
-		// Apply heartbeat configuration from settings
-		qe.SetHeartbeatEnabled(settings.EnableHeartbeat)
-		qe.SetHeartbeatInterval(time.Duration(settings.HeartbeatPeriod) * time.Minute)
-		qe.SetHeartbeatTimeout(time.Duration(settings.HeartbeatTimeout) * time.Minute)
+
 		return qe
 	}
 }

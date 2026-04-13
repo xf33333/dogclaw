@@ -41,7 +41,5 @@
   "thinkingBudget": 0,
   "showToolUsageInReply": false,
   "showThinkingInLog": true,
-  "enableHeartbeat": false,
-  "heartbeatPeriod": 1,
-  "heartbeatTimeout": 2
+
 }

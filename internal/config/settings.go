@@ -80,11 +80,6 @@ type Settings struct {
 	// MCP holds MCP (Model Context Protocol) server configurations
 	MCP *MCPSettings `json:"mcp,omitempty"`
 
-	// Heartbeat configuration
-	EnableHeartbeat  bool `json:"enableHeartbeat"`  // 是否启用心跳机制
-	HeartbeatPeriod  int  `json:"heartbeatPeriod"`  // 心跳间隔（默认 1 分钟）
-	HeartbeatTimeout int  `json:"heartbeatTimeout"` // 心跳超时时间（超过此时间无活动则判断为中断）
-
 	// AutoCompact configuration (LLM-assisted context compression)
 	AutoCompact *AutoCompactSettings `json:"autoCompact,omitempty"`
 
@@ -193,9 +188,6 @@ func DefaultSettings() *Settings {
 		ThinkingBudget:       0,
 		ShowToolUsageInReply: false,
 		ShowThinkingInLog:    true,
-		EnableHeartbeat:      false, // 默认关闭心跳机制
-		HeartbeatPeriod:      1,     // 默认 1 分钟
-		HeartbeatTimeout:     2,     // 默认 2 分钟超时
 	}
 }
 
