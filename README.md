@@ -197,6 +197,118 @@ Configuration is loaded in the following priority:
 2. Working directory: `.dogclaw/settings.json` (if multi-project mode and file exists)
 3. Default: `~/.dogclaw/settings.json`
 
+### Settings.json Configuration
+
+The `settings.json` file contains all DogClaw configuration options. Here's a complete example:
+
+```json
+{
+  "activeAlias": "default",
+  "providers": [
+    {
+      "alias": "default",
+      "provider": "anthropic",
+      "model": "claude-3-5-sonnet-20241022",
+      "url": "https://api.anthropic.com",
+      "apiKey": "sk-ant-..."
+    },
+    {
+      "alias": "openrouter",
+      "provider": "openrouter",
+      "model": "anthropic/claude-3.5-sonnet",
+      "url": "https://openrouter.ai/api/v1",
+      "apiKey": "sk-or-..."
+    }
+  ],
+  "channel": {
+    "qq": {
+      "enabled": false,
+      "appID": "",
+      "appSecret": "",
+      "allowFrom": [],
+      "sendMarkdown": false
+    },
+    "weixin": {
+      "enabled": false,
+      "token": "",
+      "encodingAESKey": "",
+      "port": 80
+    },
+    "gateway": {
+      "enabled": true,
+      "port": 10086
+    }
+  },
+  "autoCompact": {
+    "enabled": true,
+    "thresholdRatio": 0.75,
+    "warningRatio": 0.65,
+    "maxContextTokens": 190000
+  },
+  "maxTurns": 1000,
+  "maxTokens": 8192,
+  "maxContextLength": 200000,
+  "verbose": false,
+  "temperature": 0,
+  "topP": 0,
+  "thinkingBudget": 0,
+  "showToolUsageInReply": false,
+  "showThinkingInLog": true
+}
+```
+
+#### Configuration Fields
+
+**Core Settings:**
+| Field | Type | Description | Default |
+|-------|------|-------------|---------|
+| `activeAlias` | string | Alias of the active model provider | `"default"` |
+| `maxTurns` | int | Maximum conversation turns | `1000` |
+| `maxTokens` | int | Maximum tokens per response | `8192` |
+| `maxContextLength` | int | Maximum total context tokens | `200000` |
+| `verbose` | bool | Enable verbose logging | `false` |
+| `temperature` | float | LLM temperature (0-1) | `0` |
+| `topP` | float | LLM top-p sampling | `0` |
+| `thinkingBudget` | int | Thinking mode token budget (0=off) | `0` |
+| `showToolUsageInReply` | bool | Show tool usage in replies | `false` |
+| `showThinkingInLog` | bool | Show LLM thinking in logs | `true` |
+
+**Provider Model Settings:**
+| Field | Type | Description |
+|-------|------|-------------|
+| `alias` | string | Custom name for quick reference |
+| `provider` | string | Provider type: `anthropic`, `openrouter`, `openai` |
+| `model` | string | Model name (e.g., `claude-3-5-sonnet-20241022`) |
+| `url` | string | API base URL |
+| `apiKey` | string | API authentication key |
+
+**Auto-Compact Settings:**
+| Field | Type | Description | Default |
+|-------|------|-------------|---------|
+| `enabled` | bool | Enable auto-compaction | `true` |
+| `thresholdRatio` | float | Trigger compaction at this ratio | `0.75` (75%) |
+| `warningRatio` | float | Show warning at this ratio | `0.65` (65%) |
+| `maxContextTokens` | int | Hard limit before blocking | `190000` |
+
+**Channel Settings (Gateway Mode):**
+
+- **Gateway HTTP Server:**
+  - `enabled`: Enable/disable gateway server
+  - `port`: HTTP server port (default: 10086)
+
+- **QQ Bot:**
+  - `enabled`: Enable/disable QQ integration
+  - `appID`: QQ app ID
+  - `appSecret`: QQ app secret
+  - `allowFrom`: List of allowed user/group IDs
+  - `sendMarkdown`: Send messages in Markdown format
+
+- **WeChat Bot:**
+  - `enabled`: Enable/disable WeChat integration
+  - `token`: WeChat verification token
+  - `encodingAESKey`: AES encryption key
+  - `port`: Webhook server port
+
 ### Supported Providers
 
 | Provider | Base URL | Env Variables |
@@ -405,6 +517,118 @@ go build -o dogclaw ./cmd/dogclaw/
 1. `--config` 标志指定的自定义路径
 2. 工作目录：`.dogclaw/settings.json`（如果是多项目模式且文件存在）
 3. 默认：`~/.dogclaw/settings.json`
+
+### Settings.json 配置说明
+
+`settings.json` 文件包含 DogClaw 的所有配置选项。以下是完整示例：
+
+```json
+{
+  "activeAlias": "default",
+  "providers": [
+    {
+      "alias": "default",
+      "provider": "anthropic",
+      "model": "claude-3-5-sonnet-20241022",
+      "url": "https://api.anthropic.com",
+      "apiKey": "sk-ant-..."
+    },
+    {
+      "alias": "openrouter",
+      "provider": "openrouter",
+      "model": "anthropic/claude-3.5-sonnet",
+      "url": "https://openrouter.ai/api/v1",
+      "apiKey": "sk-or-..."
+    }
+  ],
+  "channel": {
+    "qq": {
+      "enabled": false,
+      "appID": "",
+      "appSecret": "",
+      "allowFrom": [],
+      "sendMarkdown": false
+    },
+    "weixin": {
+      "enabled": false,
+      "token": "",
+      "encodingAESKey": "",
+      "port": 80
+    },
+    "gateway": {
+      "enabled": true,
+      "port": 10086
+    }
+  },
+  "autoCompact": {
+    "enabled": true,
+    "thresholdRatio": 0.75,
+    "warningRatio": 0.65,
+    "maxContextTokens": 190000
+  },
+  "maxTurns": 1000,
+  "maxTokens": 8192,
+  "maxContextLength": 200000,
+  "verbose": false,
+  "temperature": 0,
+  "topP": 0,
+  "thinkingBudget": 0,
+  "showToolUsageInReply": false,
+  "showThinkingInLog": true
+}
+```
+
+#### 配置字段说明
+
+**核心设置：**
+| 字段 | 类型 | 描述 | 默认值 |
+|-------|------|------|---------|
+| `activeAlias` | string | 当前使用的模型提供商别名 | `"default"` |
+| `maxTurns` | int | 最大对话轮数 | `1000` |
+| `maxTokens` | int | 单次响应最大 token 数 | `8192` |
+| `maxContextLength` | int | 最大总上下文 token 数 | `200000` |
+| `verbose` | bool | 启用详细日志 | `false` |
+| `temperature` | float | LLM 温度参数 (0-1) | `0` |
+| `topP` | float | LLM top-p 采样 | `0` |
+| `thinkingBudget` | int | 思考模式 token 预算 (0=关闭) | `0` |
+| `showToolUsageInReply` | bool | 在回复中显示工具使用 | `false` |
+| `showThinkingInLog` | bool | 在日志中显示 LLM 思考 | `true` |
+
+**提供商模型设置：**
+| 字段 | 类型 | 描述 |
+|-------|------|------|
+| `alias` | string | 自定义名称，用于快速引用 |
+| `provider` | string | 提供商类型：`anthropic`, `openrouter`, `openai` |
+| `model` | string | 模型名称（如 `claude-3-5-sonnet-20241022`） |
+| `url` | string | API 基础 URL |
+| `apiKey` | string | API 认证密钥 |
+
+**自动压缩设置：**
+| 字段 | 类型 | 描述 | 默认值 |
+|-------|------|------|---------|
+| `enabled` | bool | 启用自动压缩 | `true` |
+| `thresholdRatio` | float | 在此比例时触发压缩 | `0.75` (75%) |
+| `warningRatio` | float | 在此比例时显示警告 | `0.65` (65%) |
+| `maxContextTokens` | int | 阻塞前的硬限制 | `190000` |
+
+**通道设置（网关模式）：**
+
+- **Gateway HTTP 服务器：**
+  - `enabled`：启用/禁用网关服务器
+  - `port`：HTTP 服务器端口（默认：10086）
+
+- **QQ 机器人：**
+  - `enabled`：启用/禁用 QQ 集成
+  - `appID`：QQ 应用 ID
+  - `appSecret`：QQ 应用密钥
+  - `allowFrom`：允许的用户/群组 ID 列表
+  - `sendMarkdown`：以 Markdown 格式发送消息
+
+- **微信机器人：**
+  - `enabled`：启用/禁用微信集成
+  - `token`：微信验证令牌
+  - `encodingAESKey`：AES 加密密钥
+  - `port`：Webhook 服务器端口
 
 ### 支持的提供商
 
