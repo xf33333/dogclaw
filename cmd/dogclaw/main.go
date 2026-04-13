@@ -218,14 +218,14 @@ func main() {
 		// If no settings, run onboard first
 		if !settingsExist {
 			fmt.Println("⚠️  No configuration found. Starting onboarding process...")
-			
+
 			// Load/create default settings first
 			settings, err := config.LoadSettings()
 			if err != nil {
 				fmt.Printf("❌ Failed to initialize settings: %v\n", err)
 				os.Exit(1)
 			}
-			
+
 			// Run onboard
 			if err := commands.RunOnboard(context.Background(), settings); err != nil {
 				fmt.Printf("❌ Onboarding failed: %v\n", err)
@@ -252,6 +252,27 @@ func main() {
 		config.SetConfigPath(configPath)
 		fmt.Printf("📁 Using config file: %s\n", configPath)
 	}
+
+	// Determine working directory based on multiProjectMode and set it for config lookup
+	var cwd string
+	if multiProjectMode {
+		// Multi-project mode: use current directory as workspace
+		cwd, _ = os.Getwd()
+	} else {
+		// Single-project mode: use ~/.dogclaw/workspace as workspace
+		home, err := os.UserHomeDir()
+		if err == nil {
+			cwd = filepath.Join(home, ".dogclaw", "workspace")
+			// Ensure workspace directory exists
+			os.MkdirAll(cwd, 0755)
+		} else {
+			// Fallback to current directory if home dir can't be found
+			cwd, _ = os.Getwd()
+		}
+	}
+	// Set working directory for config lookup
+	config.SetWorkingDir(cwd)
+	fmt.Printf("📍 Working directory: %s\n", cwd)
 
 	// Load persistent settings
 	settings, err := config.LoadSettings()

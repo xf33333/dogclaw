@@ -17,9 +17,17 @@ const (
 // customConfigPath holds the path to a custom config file, if specified
 var customConfigPath string
 
+// workingDir holds the working directory for config lookup, if specified
+var workingDir string
+
 // SetConfigPath sets a custom path for the configuration file
 func SetConfigPath(path string) {
 	customConfigPath = path
+}
+
+// SetWorkingDir sets the working directory for config lookup
+func SetWorkingDir(dir string) {
+	workingDir = dir
 }
 
 // GetConfigPath returns the current configuration file path
@@ -120,8 +128,25 @@ func GetSettingsDir() (string, error) {
 	return filepath.Join(homeDir, configDirName), nil
 }
 
-// GetSettingsPath returns the full path to the settings file ~/.docclaw/setting.json
+// GetSettingsPath returns the full path to the settings file.
+// Priority order:
+// 1. customConfigPath (if set via SetConfigPath)
+// 2. workingDir/.dogclaw/setting.json (if workingDir is set and file exists)
+// 3. ~/.dogclaw/setting.json (default)
 func GetSettingsPath() (string, error) {
+	if customConfigPath != "" {
+		return customConfigPath, nil
+	}
+
+	// Check working directory first if set
+	if workingDir != "" {
+		workDirConfig := filepath.Join(workingDir, configDirName, settingsFileName)
+		if _, err := os.Stat(workDirConfig); err == nil {
+			return workDirConfig, nil
+		}
+	}
+
+	// Fallback to home directory
 	dir, err := GetSettingsDir()
 	if err != nil {
 		return "", err
@@ -223,7 +248,11 @@ func LoadSettings() (*Settings, error) {
 	return &settings, nil
 }
 
-// SaveSettings persists the settings to the config file
+// SaveSettings persists the settings to the config file.
+// Priority order for saving:
+// 1. customConfigPath (if set via SetConfigPath)
+// 2. workingDir/.dogclaw/setting.json (if workingDir is set)
+// 3. ~/.dogclaw/setting.json (default)
 func (s *Settings) SaveSettings() error {
 	var dir string
 	var path string
@@ -232,7 +261,12 @@ func (s *Settings) SaveSettings() error {
 	if customConfigPath != "" {
 		path = customConfigPath
 		dir = filepath.Dir(path)
+	} else if workingDir != "" {
+		// Save to working directory if set
+		dir = filepath.Join(workingDir, configDirName)
+		path = filepath.Join(dir, settingsFileName)
 	} else {
+		// Default to home directory
 		dir, err = GetSettingsDir()
 		if err != nil {
 			return err
