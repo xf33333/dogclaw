@@ -23,6 +23,12 @@ const (
 	MessageTypePing MessageType = "ping"
 	// MessageTypePong is a pong message
 	MessageTypePong MessageType = "pong"
+	// MessageTypeTextChunk is a streaming text chunk from LLM
+	MessageTypeTextChunk MessageType = "text_chunk"
+	// MessageTypeToolCall is a tool call notification
+	MessageTypeToolCall MessageType = "tool_call"
+	// MessageTypeDone indicates the conversation turn is complete
+	MessageTypeDone MessageType = "done"
 )
 
 // WebSocketMessage represents a message sent over WebSocket
@@ -263,10 +269,26 @@ func (c *Channel) handleIndex(w http.ResponseWriter, r *http.Request) {
 
             ws.onmessage = function(event) {
                 const data = JSON.parse(event.data);
-                if (data.type === 'text') {
-                    addMessage(data.content, 'assistant');
-                } else if (data.type === 'error') {
-                    addMessage('错误: ' + data.content, 'assistant');
+                switch (data.type) {
+                    case 'text':
+                        addMessage(data.content, 'assistant');
+                        break;
+                    case 'text_chunk':
+                        // Streaming text chunk - append to current assistant message
+                        appendToLastAssistantMessage(data.content);
+                        break;
+                    case 'tool_call':
+                        // Tool call notification
+                        addMessage(data.content, 'assistant');
+                        break;
+                    case 'done':
+                        // Conversation turn complete
+                        enableInput();
+                        break;
+                    case 'error':
+                        addMessage('错误: ' + data.content, 'assistant');
+                        enableInput();
+                        break;
                 }
             };
         }
@@ -281,7 +303,7 @@ func (c *Channel) handleIndex(w http.ResponseWriter, r *http.Request) {
                 ws.send(JSON.stringify(msg));
                 addMessage(message, 'user');
                 messageInput.value = '';
-                messageInput.focus();
+                disableInput();
             }
         }
 
@@ -291,6 +313,28 @@ func (c *Channel) handleIndex(w http.ResponseWriter, r *http.Request) {
             messageDiv.textContent = content;
             messagesDiv.appendChild(messageDiv);
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        function appendToLastAssistantMessage(content) {
+            // Find the last assistant message or create a new one
+            let lastMessage = messagesDiv.lastElementChild;
+            if (!lastMessage || !lastMessage.classList.contains('assistant')) {
+                addMessage(content, 'assistant');
+            } else {
+                lastMessage.textContent += content;
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            }
+        }
+
+        function enableInput() {
+            messageInput.disabled = false;
+            sendButton.disabled = false;
+            messageInput.focus();
+        }
+
+        function disableInput() {
+            messageInput.disabled = true;
+            sendButton.disabled = true;
         }
 
         // Handle Enter key
@@ -324,8 +368,47 @@ func (c *Channel) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Printf("🔌 New WebSocket connection established\n")
 
+	// Create a mutex for this connection to protect concurrent writes
+	var connMu sync.Mutex
+
+	// Helper function to safely write JSON to the connection
+	safeWriteJSON := func(msg WebSocketMessage) error {
+		connMu.Lock()
+		defer connMu.Unlock()
+		return conn.WriteJSON(msg)
+	}
+
 	// Create query engine for this connection
 	qe := c.factory("gateway")
+
+	// TextCallback: fires for every LLM text block (intermediate turns with tools
+	// and the final text-only reply). Run in goroutine to avoid blocking.
+	qe.TextCallback = func(text string) {
+		go func() {
+			msg := WebSocketMessage{
+				Type:    MessageTypeTextChunk,
+				Content: text,
+			}
+			if err := safeWriteJSON(msg); err != nil {
+				fmt.Printf("❌ Failed to send text chunk: %v\n", err)
+			}
+		}()
+	}
+
+	// ToolCallCallback: sends a brief notification when a tool is called.
+	// Run in goroutine to ensure UI updates don't delay tool execution.
+	qe.ToolCallCallback = func(toolName, summary string) {
+		go func() {
+			msg := WebSocketMessage{
+				Type:    MessageTypeToolCall,
+				Content: fmt.Sprintf("🔧 %s", summary),
+			}
+			if err := safeWriteJSON(msg); err != nil {
+				fmt.Printf("❌ Failed to send tool call: %v\n", err)
+			}
+		}()
+	}
+
 	qe.AutoResumeLatestSession(c.ctx)
 
 	for {
@@ -352,28 +435,27 @@ func (c *Channel) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 					Type:    MessageTypePong,
 					Content: "",
 				}
-				conn.WriteJSON(pongMsg)
+				safeWriteJSON(pongMsg)
 			case MessageTypeText:
-				// Process the message
-				if err := qe.SubmitMessage(c.ctx, msg.Content); err != nil {
-					// Send error message
-					errMsg := WebSocketMessage{
-						Type:    MessageTypeError,
-						Content: err.Error(),
+				// Process the message asynchronously
+				go func(content string) {
+					if err := qe.SubmitMessage(c.ctx, content); err != nil {
+						// Send error message
+						errMsg := WebSocketMessage{
+							Type:    MessageTypeError,
+							Content: err.Error(),
+						}
+						safeWriteJSON(errMsg)
+						return
 					}
-					conn.WriteJSON(errMsg)
-					continue
-				}
 
-				// Get and send response
-				response := qe.GetLastAssistantText()
-				if response != "" {
-					respMsg := WebSocketMessage{
-						Type:    MessageTypeText,
-						Content: response,
+					// Send done message to indicate conversation turn is complete
+					doneMsg := WebSocketMessage{
+						Type:    MessageTypeDone,
+						Content: "",
 					}
-					conn.WriteJSON(respMsg)
-				}
+					safeWriteJSON(doneMsg)
+				}(msg.Content)
 			}
 		}
 	}

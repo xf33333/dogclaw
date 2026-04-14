@@ -360,6 +360,17 @@ func runAgent(cfg *config.Config, settings *config.Settings, multiProjectMode bo
 	engineFactory := newEngineFactory(cfg, settings, registry, multiProjectMode)
 	qe := engineFactory("cli")
 
+	// TextCallback: fires for every LLM text block (intermediate turns with tools
+	// and the final text-only reply). Print immediately for real-time feedback.
+	qe.TextCallback = func(text string) {
+		tm.Println(text)
+	}
+
+	// ToolCallCallback: prints a brief notification when a tool is called
+	qe.ToolCallCallback = func(toolName, summary string) {
+		tm.Printf("🔧 %s\n", summary)
+	}
+
 	// Try to resume the most recent session automatically
 	qe.AutoResumeLatestSession(context.Background())
 
@@ -396,12 +407,8 @@ func runAgent(cfg *config.Config, settings *config.Settings, multiProjectMode bo
 			continue
 		}
 
-		// Print response
-		response := qe.GetLastAssistantText()
-		if response != "" {
-			tm.Println(response)
-		}
-
+		// TextCallback already printed all text blocks (LLM reply + slash output),
+		// so no need to print GetLastAssistantText() here anymore.
 	}
 }
 
