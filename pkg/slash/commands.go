@@ -287,6 +287,14 @@ func RegisterBuiltinCommands(registry *CommandRegistry) {
 		Source:      "builtin",
 		Handler:     HandleShell,
 	})
+
+	registry.Register(&Command{
+		Name:        "mcp",
+		Description: "List all MCP tools and their details",
+		Type:        LocalCommand,
+		Source:      "builtin",
+		Handler:     HandleMCP,
+	})
 }
 
 // HandleHelp shows available commands
@@ -448,6 +456,14 @@ func HandleVersion(ctx context.Context, args string) (*CommandResult, error) {
 
 // HandleShell handles /shell command - actual logic in engine.handleShellCommand
 func HandleShell(ctx context.Context, args string) (*CommandResult, error) {
+	// Just acknowledge - engine.handleSlashCommand will do the actual work
+	return &CommandResult{
+		Output: "", // empty output, engine will write logs
+	}, nil
+}
+
+// HandleMCP handles /mcp command - actual logic in engine.handleSlashCommand
+func HandleMCP(ctx context.Context, args string) (*CommandResult, error) {
 	// Just acknowledge - engine.handleSlashCommand will do the actual work
 	return &CommandResult{
 		Output: "", // empty output, engine will write logs

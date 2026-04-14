@@ -467,6 +467,8 @@ func newEngineFactory(cfg *config.Config, settings *config.Settings, registry *c
 		if cfg.MaxContextLength > 0 {
 			qe.SetMaxContextLength(cfg.MaxContextLength)
 		}
+		// Set settings
+		qe.SetSettings(settings)
 
 		return qe
 	}

@@ -24,6 +24,7 @@ import (
 	"dogclaw/pkg/core"
 	"dogclaw/pkg/fastmode"
 	"dogclaw/pkg/history"
+	"dogclaw/pkg/mcp"
 	"dogclaw/pkg/memory"
 	"dogclaw/pkg/semantic"
 	"dogclaw/pkg/skills"
@@ -596,6 +597,11 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 			qe.lastAssistantText = result
 			qe.logger.Info(result)
 		}
+
+	case "mcp":
+		out := qe.handleMCPCommand()
+		qe.lastAssistantText = out
+		qe.logger.Info(out)
 
 	default:
 		qe.logger.Info(result.Output)
@@ -1193,6 +1199,102 @@ func (qe *QueryEngine) SetNeedsRestart(needsRestart bool) {
 func getRestartFlagPath() string {
 	// 获取临时目录路径
 	return filepath.Join(os.TempDir(), "dogclaw_restart.flag")
+}
+
+// handleMCPCommand handles the /mcp command to list all MCP tools and their details
+func (qe *QueryEngine) handleMCPCommand() string {
+	// 直接输出到标准输出，确保能看到结果
+	fmt.Println("🔌 MCP Tools Information:")
+	fmt.Println("  • handleMCPCommand called")
+
+	var sb strings.Builder
+	sb.WriteString("🔌 MCP Tools Information:\n")
+	sb.WriteString("  • handleMCPCommand called\n")
+
+	// Check if MCP is enabled in settings
+	if qe.settings == nil {
+		fmt.Println("  • Settings is nil")
+		sb.WriteString("  • Settings is nil\n")
+	} else if !qe.settings.MCP.Enabled {
+		fmt.Println("  • MCP is currently disabled. Enable it in settings.json")
+		sb.WriteString("  • MCP is currently disabled. Enable it in settings.json\n")
+		return sb.String()
+	} else {
+		fmt.Println("  • MCP is enabled")
+		fmt.Printf("  • Config path: %s\n", qe.settings.MCP.ConfigPath)
+		sb.WriteString("  • MCP is enabled\n")
+		sb.WriteString(fmt.Sprintf("  • Config path: %s\n", qe.settings.MCP.ConfigPath))
+	}
+
+	// Load MCP config
+	configPath, err := mcp.GetConfigPath()
+	if err != nil {
+		fmt.Printf("  • Error getting MCP config path: %v\n", err)
+		sb.WriteString(fmt.Sprintf("  • Error getting MCP config path: %v\n", err))
+		return sb.String()
+	}
+	fmt.Printf("  • Using config path: %s\n", configPath)
+	sb.WriteString(fmt.Sprintf("  • Using config path: %s\n", configPath))
+
+	mcpConfig, err := mcp.LoadConfig(configPath)
+	if err != nil {
+		fmt.Printf("  • Error loading MCP config: %v\n", err)
+		fmt.Println("  • Using default MCP configuration")
+		sb.WriteString(fmt.Sprintf("  • Error loading MCP config: %v\n", err))
+		sb.WriteString("  • Using default MCP configuration\n")
+		mcpConfig = mcp.DefaultConfig()
+	} else {
+		fmt.Printf("  • Loaded config with %d servers\n", len(mcpConfig.Servers))
+		sb.WriteString(fmt.Sprintf("  • Loaded config with %d servers\n", len(mcpConfig.Servers)))
+	}
+
+	// Create MCP manager
+	manager := mcp.NewManager(mcpConfig)
+	defer manager.Shutdown()
+
+	// Initialize MCP manager
+	ctx := context.Background()
+	if err := manager.Initialize(ctx); err != nil {
+		fmt.Printf("  • Error initializing MCP manager: %v\n", err)
+		sb.WriteString(fmt.Sprintf("  • Error initializing MCP manager: %v\n", err))
+		return sb.String()
+	}
+	fmt.Println("  • MCP manager initialized")
+	sb.WriteString("  • MCP manager initialized\n")
+
+	// Get all MCP tools
+	tools := manager.GetTools()
+	if len(tools) == 0 {
+		fmt.Println("  • No MCP tools found")
+		fmt.Println("  • MCP is enabled but no tools are available")
+		fmt.Println("  • Check your MCP server configuration")
+		sb.WriteString("  • No MCP tools found\n")
+		sb.WriteString("  • MCP is enabled but no tools are available\n")
+		sb.WriteString("  • Check your MCP server configuration\n")
+	} else {
+		fmt.Printf("  • Found %d MCP tool(s):\n", len(tools))
+		sb.WriteString(fmt.Sprintf("  • Found %d MCP tool(s):\n", len(tools)))
+
+		for i, tool := range tools {
+			fmt.Printf("\n  [%d] %s\n", i+1, tool.Name())
+			fmt.Printf("    Description: %s\n", tool.Description(nil, types.ToolDescriptionOptions{}))
+			fmt.Printf("    Aliases: %v\n", tool.Aliases())
+			fmt.Printf("    Enabled: %v\n", tool.IsEnabled())
+			fmt.Printf("    ReadOnly: %v\n", tool.IsReadOnly(nil))
+			fmt.Printf("    Destructive: %v\n", tool.IsDestructive(nil))
+			fmt.Printf("    ConcurrencySafe: %v\n", tool.IsConcurrencySafe(nil))
+			sb.WriteString(fmt.Sprintf("\n  [%d] %s\n", i+1, tool.Name()))
+			sb.WriteString(fmt.Sprintf("    Description: %s\n", tool.Description(nil, types.ToolDescriptionOptions{})))
+			sb.WriteString(fmt.Sprintf("    Aliases: %v\n", tool.Aliases()))
+			sb.WriteString(fmt.Sprintf("    Enabled: %v\n", tool.IsEnabled()))
+			sb.WriteString(fmt.Sprintf("    ReadOnly: %v\n", tool.IsReadOnly(nil)))
+			sb.WriteString(fmt.Sprintf("    Destructive: %v\n", tool.IsDestructive(nil)))
+			sb.WriteString(fmt.Sprintf("    ConcurrencySafe: %v\n", tool.IsConcurrencySafe(nil)))
+		}
+	}
+
+	result := sb.String()
+	return result
 }
 
 // initTranscript initializes the transcript system for the current session.
