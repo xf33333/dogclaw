@@ -31,10 +31,21 @@ func (m *Manager) Initialize(ctx context.Context) error {
 	defer m.mu.Unlock()
 
 	for _, server := range m.config.Servers {
-		// For now, we'll just create a placeholder client
-		// In a real implementation, you would create the appropriate client based on server type
-		client := &mockClient{
-			server: server,
+		var client Client
+
+		// Create appropriate client based on server type
+		switch server.Type {
+		case "http":
+			client = NewHTTPClient(server)
+		case "oauth":
+			client = NewOAuthClient(server)
+		case "stdio", "":
+			// Default to mock client for stdio (not implemented yet)
+			client = &mockClient{
+				server: server,
+			}
+		default:
+			return fmt.Errorf("unknown MCP server type: %s", server.Type)
 		}
 
 		if err := client.Connect(ctx); err != nil {

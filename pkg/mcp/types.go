@@ -5,9 +5,22 @@ import "context"
 // MCPServer represents a configured MCP server
 type MCPServer struct {
 	Name    string            `json:"name"`
-	Command string            `json:"command"`
+	Type    string            `json:"type"` // "stdio", "http", "oauth"
+	Command string            `json:"command,omitempty"`
 	Args    []string          `json:"args,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+	OAuth   OAuthConfig       `json:"oauth,omitempty"`
+}
+
+// OAuthConfig represents OAuth configuration for MCP servers
+type OAuthConfig struct {
+	TokenURL     string `json:"tokenUrl"`
+	ClientID     string `json:"clientId"`
+	ClientSecret string `json:"clientSecret"`
+	Scope        string `json:"scope,omitempty"`
+	Token        string `json:"token,omitempty"`
 }
 
 // MCPTool represents a tool exposed by an MCP server

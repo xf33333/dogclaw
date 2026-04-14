@@ -32,11 +32,14 @@
 
 创建 `~/.dogclaw/mcp.json` 文件，配置你的 MCP 服务器：
 
+#### Stdio 方式（默认）
+
 ```json
 {
   "servers": [
     {
       "name": "filesystem",
+      "type": "stdio",
       "command": "npx",
       "args": [
         "-y",
@@ -46,6 +49,7 @@
     },
     {
       "name": "github",
+      "type": "stdio",
       "command": "npx",
       "args": [
         "-y",
@@ -53,6 +57,82 @@
       ],
       "env": {
         "GITHUB_PERSONAL_ACCESS_TOKEN": "your-token-here"
+      }
+    }
+  ]
+}
+```
+
+#### HTTP Header 方式
+
+```json
+{
+  "servers": [
+    {
+      "name": "custom-http-server",
+      "type": "http",
+      "url": "http://localhost:8080/mcp",
+      "headers": {
+        "Authorization": "Bearer your-api-token",
+        "X-Custom-Header": "custom-value"
+      }
+    }
+  ]
+}
+```
+
+#### HTTP OAuth 方式
+
+```json
+{
+  "servers": [
+    {
+      "name": "oauth-server",
+      "type": "oauth",
+      "url": "http://localhost:8080/mcp",
+      "oauth": {
+        "tokenUrl": "http://localhost:8080/oauth/token",
+        "clientId": "your-client-id",
+        "clientSecret": "your-client-secret",
+        "scope": "read write"
+      }
+    }
+  ]
+}
+```
+
+#### 混合配置
+
+```json
+{
+  "servers": [
+    {
+      "name": "filesystem",
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/path/to/your/project"
+      ]
+    },
+    {
+      "name": "custom-http-server",
+      "type": "http",
+      "url": "http://localhost:8080/mcp",
+      "headers": {
+        "Authorization": "Bearer your-api-token"
+      }
+    },
+    {
+      "name": "oauth-server",
+      "type": "oauth",
+      "url": "http://localhost:8080/mcp",
+      "oauth": {
+        "tokenUrl": "http://localhost:8080/oauth/token",
+        "clientId": "your-client-id",
+        "clientSecret": "your-client-secret",
+        "scope": "read write"
       }
     }
   ]
