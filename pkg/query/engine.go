@@ -1025,7 +1025,7 @@ func (qe *QueryEngine) SetSettings(settings *config.Settings) {
 		qe.verbose = settings.Verbose
 
 		// Initialize MCP if enabled
-		if settings.MCP.Enabled {
+		if settings.MCP != nil && settings.MCP.Enabled {
 			qe.initializeMCP()
 		}
 	}
