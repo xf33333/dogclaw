@@ -39,7 +39,7 @@ func BuildSimpleMemoryLines(cfg PromptConfig) []string {
 		"",
 		"If the user explicitly asks you to remember something, save it immediately as whichever type fits best. If they ask you to forget something, find and remove the relevant entry.",
 		"",
-		" IMPORTANT: For detailed memory system documentation including how to add, modify, and delete memories, use the MemoryExplain tool FIRST.",
+		" IMPORTANT: Get detailed memory system documentation before add, modify, and delete memories, use the MemoryExplain tool.",
 		"",
 	}
 	return lines
