@@ -42,7 +42,7 @@ func (h *HTTPClient) Disconnect() error {
 
 // ListTools retrieves all available tools from the HTTP MCP server
 func (h *HTTPClient) ListTools(ctx context.Context) ([]MCPTool, error) {
-	// Call tools/list endpoint
+	// Call tools.list JSON-RPC method
 	response, err := h.callEndpoint(ctx, "tools/list", nil)
 	if err != nil {
 		return nil, err
@@ -65,14 +65,14 @@ func (h *HTTPClient) ListTools(ctx context.Context) ([]MCPTool, error) {
 
 // CallTool executes a tool on the HTTP MCP server
 func (h *HTTPClient) CallTool(ctx context.Context, toolName string, arguments map[string]interface{}) (*MCPToolCallResult, error) {
-	// Prepare request body
-	requestBody := map[string]interface{}{
+	// Prepare request parameters
+	requestParams := map[string]interface{}{
 		"name":      toolName,
 		"arguments": arguments,
 	}
 
-	// Call tools/call endpoint
-	response, err := h.callEndpoint(ctx, "tools/call", requestBody)
+	// Call tools.call JSON-RPC method
+	response, err := h.callEndpoint(ctx, "tools.call", requestParams)
 	if err != nil {
 		return nil, err
 	}
@@ -90,20 +90,22 @@ func (h *HTTPClient) ServerName() string {
 	return h.server.Name
 }
 
-// callEndpoint makes an HTTP request to the specified endpoint
-func (h *HTTPClient) callEndpoint(ctx context.Context, endpoint string, body interface{}) ([]byte, error) {
-	// Prepare request
-	var bodyReader io.Reader
-	if body != nil {
-		jsonData, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal request body: %w", err)
-		}
-		bodyReader = bytes.NewReader(jsonData)
+// callEndpoint makes an HTTP request to the specified endpoint using JSON-RPC
+func (h *HTTPClient) callEndpoint(ctx context.Context, method string, params interface{}) ([]byte, error) {
+	// Prepare JSON-RPC request
+	requestBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"method":  method,
+		"params":  params,
+		"id":      1, // Simple incrementing ID
 	}
 
-	url := fmt.Sprintf("%s/%s", h.baseURL, endpoint)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bodyReader)
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal JSON-RPC request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", h.baseURL, bytes.NewReader(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -132,5 +134,32 @@ func (h *HTTPClient) callEndpoint(ctx context.Context, endpoint string, body int
 		return nil, fmt.Errorf("HTTP request failed with status %d: %s", resp.StatusCode, string(responseBody))
 	}
 
-	return responseBody, nil
+	// Parse JSON-RPC response
+	var rpcResponse struct {
+		JSONRPC string      `json:"jsonrpc"`
+		Result  interface{} `json:"result"`
+		Error   *struct {
+			Code    int         `json:"code"`
+			Message string      `json:"message"`
+			Data    interface{} `json:"data,omitempty"`
+		} `json:"error,omitempty"`
+		ID int `json:"id"`
+	}
+
+	if err := json.Unmarshal(responseBody, &rpcResponse); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON-RPC response: %w", err)
+	}
+
+	// Check for JSON-RPC error
+	if rpcResponse.Error != nil {
+		return nil, fmt.Errorf("JSON-RPC error: code=%d, message=%s", rpcResponse.Error.Code, rpcResponse.Error.Message)
+	}
+
+	// Convert result back to JSON
+	resultJSON, err := json.Marshal(rpcResponse.Result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal JSON-RPC result: %w", err)
+	}
+
+	return resultJSON, nil
 }

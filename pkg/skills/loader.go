@@ -124,9 +124,23 @@ func ParseSkill(content string, filePath string, name string, source SkillSource
 func DiscoverSkills(cwd string) ([]*Skill, error) {
 	var allSkills []*Skill
 
+	//Project skills (walking up from cwd)
+	curr := cwd
+	//for {
+	projectSkillsDir := filepath.Join(curr, ".dogclaw", "skills")
+	skills, _ := LoadSkillsFromDir(projectSkillsDir, SourceProject)
+	allSkills = append(allSkills, skills...)
+
+	//parent := filepath.Dir(curr)
+	//if parent == curr {
+	//	break
+	//}
+	//curr = parent
+	//}
+
 	// 1. Current directory skills directory (./skills) - HIGHEST PRIORITY
 	currSkillsDir := filepath.Join(cwd, "skills")
-	skills, _ := LoadSkillsFromDir(currSkillsDir, SourceProject)
+	skills, _ = LoadSkillsFromDir(currSkillsDir, SourceProject)
 	allSkills = append(allSkills, skills...)
 
 	// 2. User skills
@@ -142,21 +156,16 @@ func DiscoverSkills(cwd string) ([]*Skill, error) {
 
 	}
 
-	// 3. Project skills (walking up from cwd)
-	curr := cwd
-	for {
-		projectSkillsDir := filepath.Join(curr, ".dogclaw", "skills")
-		skills, _ := LoadSkillsFromDir(projectSkillsDir, SourceProject)
-		allSkills = append(allSkills, skills...)
-
-		parent := filepath.Dir(curr)
-		if parent == curr {
-			break
+	// Deduplicate by name, keeping the first occurrence (priority order)
+	seen := make(map[string]bool)
+	dedupedSkills := []*Skill{}
+	for _, skill := range allSkills {
+		if !seen[skill.Name] {
+			seen[skill.Name] = true
+			dedupedSkills = append(dedupedSkills, skill)
 		}
-		curr = parent
 	}
 
-	// TODO: Deduplicate by name or file path if necessary
-
-	return allSkills, nil
+	return dedupedSkills, nil
 }
+ 

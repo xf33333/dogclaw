@@ -120,8 +120,8 @@ type QueryEngine struct {
 	conversationEndTime   time.Time // 对话结束时间戳
 
 	// User input buffer for插队处理
-	userInputQueue     *list.List    // 用户输入队列
-	userInputQueueMu   sync.RWMutex  // 保护用户输入队列的锁
+	userInputQueue   *list.List   // 用户输入队列
+	userInputQueueMu sync.RWMutex // 保护用户输入队列的锁
 
 	// logger is the logrus instance for structured logging
 	logger            *logrus.Logger
@@ -1469,8 +1469,8 @@ func (qe *QueryEngine) ResumeFromTranscript(sessionID string) error {
 				qe.messages = compact.FilterOrphanedToolResults(qe.messages)
 
 				if qe.verbose {
-					qe.logger.Debugf("[Resume] Loaded %d additional messages after compact timestamp", 
-						len(qe.messages) - len(compactedSession.Messages))
+					qe.logger.Debugf("[Resume] Loaded %d additional messages after compact timestamp",
+						len(qe.messages)-len(compactedSession.Messages))
 				}
 
 				// 标记为已压缩，避免再次压缩
@@ -2093,7 +2093,7 @@ func BuildSystemPrompt(tools []types.Tool, loadedSkills []*skills.Skill, customP
 
 	if len(loadedSkills) > 0 {
 		sb.WriteString("\n## Skills (mandatory)\n\n")
-		sb.WriteString("###如果用户需要完成某些任务，优先查询是否可以使用以下技能:\n")
+		sb.WriteString("### 如果用户需要完成某些任务，优先查询是否可以使用以下技能:\n")
 		//sb.WriteString("- For simple skills (single SKILL.md), use 'Skill' tool with action 'install'.\n")
 		//sb.WriteString("- For complex skills (multiple files), manually create ~/.dogclaw/skills/<skill-name>/ and write SKILL.md plus any other assets using file tools.\n\n")
 		for _, s := range loadedSkills {

@@ -32,14 +32,12 @@
 
 创建 `~/.dogclaw/mcp.json` 文件，配置你的 MCP 服务器：
 
-#### Stdio 方式（默认）
+#### 新格式（推荐）
 
 ```json
 {
-  "servers": [
-    {
-      "name": "filesystem",
-      "type": "stdio",
+  "servers": {
+    "filesystem": {
       "command": "npx",
       "args": [
         "-y",
@@ -47,48 +45,14 @@
         "/path/to/your/project"
       ]
     },
-    {
-      "name": "github",
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-github"
-      ],
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "your-token-here"
-      }
-    }
-  ]
-}
-```
-
-#### HTTP Header 方式
-
-```json
-{
-  "servers": [
-    {
-      "name": "custom-http-server",
-      "type": "http",
+    "custom-http-server": {
       "url": "http://localhost:8080/mcp",
       "headers": {
         "Authorization": "Bearer your-api-token",
         "X-Custom-Header": "custom-value"
       }
-    }
-  ]
-}
-```
-
-#### HTTP OAuth 方式
-
-```json
-{
-  "servers": [
-    {
-      "name": "oauth-server",
-      "type": "oauth",
+    },
+    "oauth-server": {
       "url": "http://localhost:8080/mcp",
       "oauth": {
         "tokenUrl": "http://localhost:8080/oauth/token",
@@ -97,47 +61,24 @@
         "scope": "read write"
       }
     }
-  ]
+  }
 }
 ```
 
-#### 混合配置
+#### 格式说明
 
-```json
-{
-  "servers": [
-    {
-      "name": "filesystem",
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "/path/to/your/project"
-      ]
-    },
-    {
-      "name": "custom-http-server",
-      "type": "http",
-      "url": "http://localhost:8080/mcp",
-      "headers": {
-        "Authorization": "Bearer your-api-token"
-      }
-    },
-    {
-      "name": "oauth-server",
-      "type": "oauth",
-      "url": "http://localhost:8080/mcp",
-      "oauth": {
-        "tokenUrl": "http://localhost:8080/oauth/token",
-        "clientId": "your-client-id",
-        "clientSecret": "your-client-secret",
-        "scope": "read write"
-      }
-    }
-  ]
-}
-```
+- **类型自动推断**：
+  - 包含 `command` 字段：自动识别为 `stdio` 类型
+  - 包含 `oauth` 字段：自动识别为 `oauth` 类型
+  - 其他情况：自动识别为 `http` 类型
+
+- **服务器名称**：使用 JSON 对象的键作为服务器名称
+
+- **HTTP Header 方式**：通过 `headers` 字段设置自定义 HTTP 头
+
+- **HTTP OAuth 方式**：通过 `oauth` 字段设置 OAuth 配置
+
+- **Stdio 方式**：通过 `command` 和 `args` 字段设置命令行参数
 
 ### 3. 工具命名约定
 

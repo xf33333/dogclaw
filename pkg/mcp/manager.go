@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"dogclaw/internal/logger"
 	"fmt"
 	"sync"
 
@@ -30,7 +31,19 @@ func (m *Manager) Initialize(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for _, server := range m.config.Servers {
+	for name, server := range m.config.Servers {
+		// Set server name from map key
+		server.Name = name
+
+		// Automatically determine server type
+		if server.Command != "" {
+			server.Type = "stdio"
+		} else if server.OAuth.TokenURL != "" || server.OAuth.ClientID != "" || server.OAuth.ClientSecret != "" {
+			server.Type = "oauth"
+		} else {
+			server.Type = "http"
+		}
+
 		var client Client
 
 		// Create appropriate client based on server type
@@ -39,7 +52,7 @@ func (m *Manager) Initialize(ctx context.Context) error {
 			client = NewHTTPClient(server)
 		case "oauth":
 			client = NewOAuthClient(server)
-		case "stdio", "":
+		case "stdio":
 			// Default to mock client for stdio (not implemented yet)
 			client = &mockClient{
 				server: server,
@@ -49,7 +62,8 @@ func (m *Manager) Initialize(ctx context.Context) error {
 		}
 
 		if err := client.Connect(ctx); err != nil {
-			return fmt.Errorf("failed to connect to MCP server %s: %w", server.Name, err)
+			logger.GetGlobalLogger().Errorf("failed to connect to MCP server %s: %w", server.Name, err)
+			continue
 		}
 
 		m.clients[server.Name] = client
@@ -57,7 +71,8 @@ func (m *Manager) Initialize(ctx context.Context) error {
 		// Load tools from the server
 		tools, err := client.ListTools(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to list tools from MCP server %s: %w", server.Name, err)
+			logger.GetGlobalLogger().Errorf("failed to list tools from MCP server %s: %w", server.Name, err)
+			continue
 		}
 
 		for _, tool := range tools {

@@ -9,13 +9,13 @@ import (
 
 // Config holds MCP configuration
 type Config struct {
-	Servers []MCPServer `json:"servers"`
+	Servers map[string]MCPServer `json:"servers"`
 }
 
 // DefaultConfig returns a default MCP configuration
 func DefaultConfig() *Config {
 	return &Config{
-		Servers: []MCPServer{},
+		Servers: make(map[string]MCPServer),
 	}
 }
 
