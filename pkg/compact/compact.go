@@ -362,14 +362,55 @@ The summary should capture all important context so the conversation can continu
 Be concise but thorough. Focus on actionable information and current state.`, originalSystemPrompt)
 }
 
+// FilterOrphanedToolResults filters out tool_result blocks that don't have corresponding tool_use blocks
+func FilterOrphanedToolResults(messages []api.MessageParam) []api.MessageParam {
+	// Collect all tool_use IDs
+	toolUseIDs := make(map[string]bool)
+	for _, msg := range messages {
+		if contentBlocks, ok := msg.Content.([]api.ContentBlockParam); ok {
+			for _, block := range contentBlocks {
+				if block.Type == "tool_use" && block.ID != "" {
+					toolUseIDs[block.ID] = true
+				}
+			}
+		}
+	}
+
+	// Filter messages to remove orphaned tool_result blocks
+	filteredMessages := make([]api.MessageParam, 0, len(messages))
+	for _, msg := range messages {
+		if contentBlocks, ok := msg.Content.([]api.ContentBlockParam); ok {
+			filteredBlocks := make([]api.ContentBlockParam, 0, len(contentBlocks))
+			for _, block := range contentBlocks {
+				// Keep non-tool_result blocks or tool_result blocks with corresponding tool_use
+				if block.Type != "tool_result" || (block.ToolUseID != "" && toolUseIDs[block.ToolUseID]) {
+					filteredBlocks = append(filteredBlocks, block)
+				}
+			}
+			// Only add the message if it has remaining blocks
+			if len(filteredBlocks) > 0 {
+				filteredMsg := msg
+				filteredMsg.Content = filteredBlocks
+				filteredMessages = append(filteredMessages, filteredMsg)
+			}
+		} else {
+			// Non-block content, keep as is
+			filteredMessages = append(filteredMessages, msg)
+		}
+	}
+
+	return filteredMessages
+}
+
 // ApplyCompactResult applies a compaction result to the message list
 func ApplyCompactResult(messages []api.MessageParam, result *CompactResult) []api.MessageParam {
 	if result == nil {
 		return messages
 	}
 	if result.PostCompactMessages != nil {
-		return result.PostCompactMessages
+		// Filter orphaned tool_result blocks before returning
+		return FilterOrphanedToolResults(result.PostCompactMessages)
 	}
 	// 兼容旧版本，没有 PostCompactMessages 字段时返回 SummaryMessages
-	return result.SummaryMessages
+	return FilterOrphanedToolResults(result.SummaryMessages)
 }

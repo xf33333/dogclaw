@@ -1465,6 +1465,9 @@ func (qe *QueryEngine) ResumeFromTranscript(sessionID string) error {
 					}
 				}
 
+				// 过滤没有对应tool_use的tool_result
+				qe.messages = compact.FilterOrphanedToolResults(qe.messages)
+
 				if qe.verbose {
 					qe.logger.Debugf("[Resume] Loaded %d additional messages after compact timestamp", 
 						len(qe.messages) - len(compactedSession.Messages))
@@ -1493,6 +1496,9 @@ func (qe *QueryEngine) ResumeFromTranscript(sessionID string) error {
 	if err != nil {
 		return fmt.Errorf("failed to convert transcript: %w", err)
 	}
+
+	// 过滤没有对应tool_use的tool_result
+	messages = compact.FilterOrphanedToolResults(messages)
 
 	// Restore state
 	qe.messages = messages
