@@ -62,7 +62,11 @@ func (a *MCPToolAdapter) InputSchema() types.ToolInputSchema {
 
 // Description returns a description of what the tool does
 func (a *MCPToolAdapter) Description(input map[string]any, opts types.ToolDescriptionOptions) string {
-	return fmt.Sprintf("[MCP/%s] %s", a.tool.ServerName, a.tool.Description)
+	desc := fmt.Sprintf("[MCP/%s] %s", a.tool.ServerName, a.tool.Description)
+	if len(desc) > 512 {
+		desc = desc[:512] + "… [truncated]"
+	}
+	return desc
 }
 
 // Call executes the tool with the given input

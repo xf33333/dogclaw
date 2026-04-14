@@ -115,6 +115,9 @@ type QueryEngine struct {
 	isProcessing bool         // 当前是否有正在进行的查询
 	processingMu sync.RWMutex // 保护处理状态的锁
 
+	// MCP manager
+	mcpManager *mcp.Manager
+
 	// Conversation timing
 	conversationStartTime time.Time // 对话开始时间戳
 	conversationEndTime   time.Time // 对话结束时间戳
@@ -1020,6 +1023,52 @@ func (qe *QueryEngine) SetSettings(settings *config.Settings) {
 			qe.maxTurns = settings.MaxTurns
 		}
 		qe.verbose = settings.Verbose
+
+		// Initialize MCP if enabled
+		if settings.MCP.Enabled {
+			qe.initializeMCP()
+		}
+	}
+}
+
+// initializeMCP initializes MCP manager and loads MCP tools
+func (qe *QueryEngine) initializeMCP() {
+	if qe.settings == nil || !qe.settings.MCP.Enabled {
+		return
+	}
+
+	// Get MCP config path
+	configPath, err := mcp.GetConfigPath()
+	if err != nil {
+		qe.logger.Warnf("Failed to get MCP config path: %v", err)
+		return
+	}
+
+	// Load MCP config
+	mcpConfig, err := mcp.LoadConfig(configPath)
+	if err != nil {
+		qe.logger.Warnf("Failed to load MCP config: %v", err)
+		return
+	}
+
+	// Create MCP manager
+	qe.mcpManager = mcp.NewManager(mcpConfig)
+
+	// Initialize MCP manager
+	ctx := context.Background()
+	if err := qe.mcpManager.Initialize(ctx); err != nil {
+		qe.logger.Warnf("Failed to initialize MCP manager: %v", err)
+		return
+	}
+
+	// Get MCP tools and add to tool list
+	mcpTools := qe.mcpManager.GetTools()
+	if len(mcpTools) > 0 {
+		// Add MCP tools to the engine's tool list
+		qe.tools = append(qe.tools, mcpTools...)
+		qe.logger.Infof("Loaded %d MCP tools", len(mcpTools))
+	} else {
+		qe.logger.Info("MCP is enabled but no tools are available")
 	}
 }
 
@@ -1203,86 +1252,37 @@ func getRestartFlagPath() string {
 
 // handleMCPCommand handles the /mcp command to list all MCP tools and their details
 func (qe *QueryEngine) handleMCPCommand() string {
-	// 直接输出到标准输出，确保能看到结果
-	fmt.Println("🔌 MCP Tools Information:")
-	fmt.Println("  • handleMCPCommand called")
-
 	var sb strings.Builder
 	sb.WriteString("🔌 MCP Tools Information:\n")
-	sb.WriteString("  • handleMCPCommand called\n")
 
 	// Check if MCP is enabled in settings
 	if qe.settings == nil {
-		fmt.Println("  • Settings is nil")
 		sb.WriteString("  • Settings is nil\n")
 	} else if !qe.settings.MCP.Enabled {
-		fmt.Println("  • MCP is currently disabled. Enable it in settings.json")
 		sb.WriteString("  • MCP is currently disabled. Enable it in settings.json\n")
 		return sb.String()
 	} else {
-		fmt.Println("  • MCP is enabled")
-		fmt.Printf("  • Config path: %s\n", qe.settings.MCP.ConfigPath)
 		sb.WriteString("  • MCP is enabled\n")
 		sb.WriteString(fmt.Sprintf("  • Config path: %s\n", qe.settings.MCP.ConfigPath))
 	}
 
-	// Load MCP config
-	configPath, err := mcp.GetConfigPath()
-	if err != nil {
-		fmt.Printf("  • Error getting MCP config path: %v\n", err)
-		sb.WriteString(fmt.Sprintf("  • Error getting MCP config path: %v\n", err))
+	// Check if MCP manager is initialized
+	if qe.mcpManager == nil {
+		sb.WriteString("  • MCP manager is not initialized\n")
+		sb.WriteString("  • MCP should be loaded at startup if enabled\n")
 		return sb.String()
 	}
-	fmt.Printf("  • Using config path: %s\n", configPath)
-	sb.WriteString(fmt.Sprintf("  • Using config path: %s\n", configPath))
 
-	mcpConfig, err := mcp.LoadConfig(configPath)
-	if err != nil {
-		fmt.Printf("  • Error loading MCP config: %v\n", err)
-		fmt.Println("  • Using default MCP configuration")
-		sb.WriteString(fmt.Sprintf("  • Error loading MCP config: %v\n", err))
-		sb.WriteString("  • Using default MCP configuration\n")
-		mcpConfig = mcp.DefaultConfig()
-	} else {
-		fmt.Printf("  • Loaded config with %d servers\n", len(mcpConfig.Servers))
-		sb.WriteString(fmt.Sprintf("  • Loaded config with %d servers\n", len(mcpConfig.Servers)))
-	}
-
-	// Create MCP manager
-	manager := mcp.NewManager(mcpConfig)
-	defer manager.Shutdown()
-
-	// Initialize MCP manager
-	ctx := context.Background()
-	if err := manager.Initialize(ctx); err != nil {
-		fmt.Printf("  • Error initializing MCP manager: %v\n", err)
-		sb.WriteString(fmt.Sprintf("  • Error initializing MCP manager: %v\n", err))
-		return sb.String()
-	}
-	fmt.Println("  • MCP manager initialized")
-	sb.WriteString("  • MCP manager initialized\n")
-
-	// Get all MCP tools
-	tools := manager.GetTools()
+	// Get all MCP tools from the initialized manager
+	tools := qe.mcpManager.GetTools()
 	if len(tools) == 0 {
-		fmt.Println("  • No MCP tools found")
-		fmt.Println("  • MCP is enabled but no tools are available")
-		fmt.Println("  • Check your MCP server configuration")
 		sb.WriteString("  • No MCP tools found\n")
 		sb.WriteString("  • MCP is enabled but no tools are available\n")
 		sb.WriteString("  • Check your MCP server configuration\n")
 	} else {
-		fmt.Printf("  • Found %d MCP tool(s):\n", len(tools))
 		sb.WriteString(fmt.Sprintf("  • Found %d MCP tool(s):\n", len(tools)))
 
 		for i, tool := range tools {
-			fmt.Printf("\n  [%d] %s\n", i+1, tool.Name())
-			fmt.Printf("    Description: %s\n", tool.Description(nil, types.ToolDescriptionOptions{}))
-			fmt.Printf("    Aliases: %v\n", tool.Aliases())
-			fmt.Printf("    Enabled: %v\n", tool.IsEnabled())
-			fmt.Printf("    ReadOnly: %v\n", tool.IsReadOnly(nil))
-			fmt.Printf("    Destructive: %v\n", tool.IsDestructive(nil))
-			fmt.Printf("    ConcurrencySafe: %v\n", tool.IsConcurrencySafe(nil))
 			sb.WriteString(fmt.Sprintf("\n  [%d] %s\n", i+1, tool.Name()))
 			sb.WriteString(fmt.Sprintf("    Description: %s\n", tool.Description(nil, types.ToolDescriptionOptions{})))
 			sb.WriteString(fmt.Sprintf("    Aliases: %v\n", tool.Aliases()))

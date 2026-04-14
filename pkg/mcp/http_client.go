@@ -72,7 +72,7 @@ func (h *HTTPClient) CallTool(ctx context.Context, toolName string, arguments ma
 	}
 
 	// Call tools.call JSON-RPC method
-	response, err := h.callEndpoint(ctx, "tools.call", requestParams)
+	response, err := h.callEndpoint(ctx, "tools/call", requestParams)
 	if err != nil {
 		return nil, err
 	}
