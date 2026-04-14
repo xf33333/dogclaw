@@ -5,7 +5,7 @@ import "context"
 // ToolInputSchema represents the JSON schema for tool input
 type ToolInputSchema struct {
 	Type       string         `json:"type"`
-	Properties map[string]any `json:"properties,omitempty"`
+	Properties map[string]any `json:"properties"`
 	Required   []string       `json:"required,omitempty"`
 }
 
