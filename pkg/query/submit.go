@@ -1257,7 +1257,7 @@ func (qe *QueryEngine) buildFullSystemPrompt() (string, *api.MemorySummary) {
 	// Inject memory system prompt and relevant memories
 	if qe.memoryIndex != nil {
 		if qe.autoMemoryPrompt == "" {
-			qe.autoMemoryPrompt = memory.BuildMemoryPrompt(memory.PromptConfig{
+			qe.autoMemoryPrompt = memory.BuildSimpleMemoryPrompt(memory.PromptConfig{
 				DisplayName: "Auto Memory",
 				MemoryDir:   qe.memoryDir,
 			})

@@ -423,6 +423,7 @@ func buildTools(registry *channel.Registry) []types.Tool {
 		tools.NewGlobTool(),
 		tools.NewWebSearchTool(),
 		tools.NewRestartGatewayTool(),
+		tools.NewMemoryExplainTool(),
 		cron.NewCronTool(),
 		skilltool.NewSkillTool(),
 	}

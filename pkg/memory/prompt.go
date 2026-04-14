@@ -19,6 +19,32 @@ type PromptConfig struct {
 	SkipIndex bool
 }
 
+func BuildSimpleMemoryPrompt(cfg PromptConfig) string {
+	lines := BuildSimpleMemoryLines(cfg)
+
+	if !cfg.SkipIndex {
+		lines = append(lines, buildEntrypointSection(cfg.MemoryDir)...)
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func BuildSimpleMemoryLines(cfg PromptConfig) []string {
+	lines := []string{
+		fmt.Sprintf("# %s", cfg.DisplayName),
+		"",
+		fmt.Sprintf("You have a persistent, file-based memory system at `%s`. %s", cfg.MemoryDir, DirExistsGuidance()),
+		"",
+		"You should build up this memory system over time so that future conversations can have a complete picture of who the user is, how they'd like to collaborate with you, what behaviors to avoid or repeat, and the context behind the work the user gives you.",
+		"",
+		"If the user explicitly asks you to remember something, save it immediately as whichever type fits best. If they ask you to forget something, find and remove the relevant entry.",
+		"",
+		" IMPORTANT: For detailed memory system documentation including how to add, modify, and delete memories, use the MemoryExplain tool FIRST.",
+		"",
+	}
+	return lines
+}
+
 // BuildMemoryPrompt builds the typed-memory behavioral instructions
 // for inclusion in the system prompt. It constrains memories to a closed
 // four-type taxonomy and excludes content derivable from project state.
