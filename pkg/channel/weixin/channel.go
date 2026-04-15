@@ -31,6 +31,28 @@ type WeixinChannel struct {
 
 	syncBufPath       string
 	contextTokensPath string
+
+	retryMu    sync.Mutex
+	retryQueue []retryEntry
+
+	sendMu sync.Map // userID → *sync.Mutex for per-user send rate limiting
+
+	// Message queue for batching (per user)
+	queueMu      sync.Mutex
+	messageQueue map[string]*userMessageQueue // userID → queue
+}
+
+type userMessageQueue struct {
+	messages     []string
+	sendCount    int // messages sent with current token
+	waitForFlush bool
+}
+
+type retryEntry struct {
+	ToUserID string
+	Content  string
+	Retries  int
+	NextTry  time.Time
 }
 
 // ChatSession wraps a QueryEngine for a single Weixin conversation
@@ -52,6 +74,7 @@ func NewWeixinChannel(cfg config.WeixinSettings) (*WeixinChannel, error) {
 		typingCache:       make(map[string]typingTicketCacheEntry),
 		syncBufPath:       buildWeixinSyncBufPath(cfg),
 		contextTokensPath: buildWeixinContextTokensPath(cfg),
+		messageQueue:      make(map[string]*userMessageQueue),
 	}, nil
 }
 
@@ -206,6 +229,8 @@ func (c *WeixinChannel) pollLoop(ctx context.Context, factory channel.EngineFact
 		for _, msg := range resp.Msgs {
 			c.handleInboundMessage(ctx, msg, factory)
 		}
+
+		c.processRetryQueue(ctx)
 	}
 }
 
@@ -236,10 +261,12 @@ func (c *WeixinChannel) handleInboundMessage(ctx context.Context, msg WeixinMess
 		}
 		c.contextTokens.Store(fromUserID, token)
 		c.persistContextTokens()
+		c.resetQueueCount(fromUserID)
 		msg.ContextToken = token
 	} else {
 		c.contextTokens.Store(fromUserID, msg.ContextToken)
 		c.persistContextTokens()
+		c.resetQueueCount(fromUserID)
 	}
 
 	var parts []string
@@ -247,7 +274,6 @@ func (c *WeixinChannel) handleInboundMessage(ctx context.Context, msg WeixinMess
 		if item.Type == MessageItemTypeText && item.TextItem != nil {
 			parts = append(parts, item.TextItem.Text)
 		}
-		// Add other media types as needed
 	}
 
 	content := strings.Join(parts, "\n")
@@ -257,6 +283,11 @@ func (c *WeixinChannel) handleInboundMessage(ctx context.Context, msg WeixinMess
 	}
 
 	if !c.isAllowedSender(fromUserID) {
+		return
+	}
+
+	if testMode {
+		c.handleTestMessage(ctx, fromUserID)
 		return
 	}
 
@@ -278,14 +309,14 @@ func (c *WeixinChannel) getOrCreateSession(ctx context.Context, chatID string, f
 	engine := factory("weixin")
 	// TextCallback: fires for every LLM text block (both intermediate turns with tools
 	// and the final text-only reply).
-	// Run in goroutine to avoid blocking the query engine loop if platform API is slow.
-	engine.TextCallback = func(text string) {
-		go c.sendMessage(c.ctx, chatID, text)
+	// Uses message queue to batch messages (max 10 per context token).
+	engine.TextCallback = func(text string, isFinish bool) {
+		c.queueMessage(ctx, chatID, text, isFinish)
 	}
 	// ToolCallCallback: sends a brief notification when a tool is called
-	// Run in goroutine to ensure UI updates don't delay tool execution.
+	// Uses message queue to batch messages.
 	engine.ToolCallCallback = func(toolName, summary string) {
-		go c.sendMessage(c.ctx, chatID, fmt.Sprintf("🔧 %s", summary))
+		c.queueMessage(ctx, chatID, fmt.Sprintf("🔧 %s", summary), false)
 	}
 	engine.AutoResumeLatestSession(context.Background())
 
@@ -348,13 +379,88 @@ func (c *WeixinChannel) getReply(ctx context.Context, session *ChatSession, prom
 	return ""
 }
 
+const (
+	maxMessagesPerToken = 10
+	flushThreshold      = 3
+	warningThreshold    = 9
+)
+
+func (c *WeixinChannel) queueMessage(ctx context.Context, toUserID, text string, isFinish bool) {
+	c.queueMu.Lock()
+	defer c.queueMu.Unlock()
+
+	queue, ok := c.messageQueue[toUserID]
+	if !ok {
+		queue = &userMessageQueue{
+			messages:  []string{},
+			sendCount: 0,
+		}
+		c.messageQueue[toUserID] = queue
+	}
+
+	if text != "" {
+		queue.messages = append(queue.messages, text)
+	}
+
+	if isFinish {
+		c.flushQueue(ctx, toUserID, queue)
+		return
+	}
+
+	if queue.waitForFlush {
+		return
+	}
+
+	if len(queue.messages) >= flushThreshold {
+		c.flushQueue(ctx, toUserID, queue)
+	}
+}
+
+func (c *WeixinChannel) flushQueue(ctx context.Context, toUserID string, queue *userMessageQueue) {
+	if len(queue.messages) == 0 {
+		return
+	}
+
+	if queue.sendCount >= warningThreshold && queue.sendCount < maxMessagesPerToken {
+		queue.waitForFlush = true
+		logger.Infof("[weixin] Message queue for %s at %d/%d, waiting for finish", toUserID, queue.sendCount, maxMessagesPerToken)
+		return
+	}
+
+	if queue.sendCount >= maxMessagesPerToken {
+		logger.Warnf("[weixin] Message queue for %s exceeded max %d messages, flushing anyway", toUserID, maxMessagesPerToken)
+	}
+
+	merged := strings.Join(queue.messages, "\n\n")
+	queue.messages = nil
+
+	go c.sendMessage(c.ctx, toUserID, merged)
+	queue.sendCount++
+
+	logger.Infof("[weixin] Flushed queue for %s, sendCount now %d", toUserID, queue.sendCount)
+}
+
+func (c *WeixinChannel) resetQueueCount(toUserID string) {
+	c.queueMu.Lock()
+	defer c.queueMu.Unlock()
+
+	if queue, ok := c.messageQueue[toUserID]; ok {
+		queue.sendCount = 0
+		queue.waitForFlush = false
+		logger.Infof("[weixin] Reset send count for %s", toUserID)
+	}
+}
+
 func (c *WeixinChannel) sendMessage(ctx context.Context, toUserID, content string) {
 	if content == "" {
 		return
 	}
 
-	// Create a dedicated context with a 30s timeout for outbound message delivery
-	// to prevent platform API hangs from blocking the engine or background tasks.
+	umuInterface, _ := c.sendMu.LoadOrStore(toUserID, &sync.Mutex{})
+	umu := umuInterface.(*sync.Mutex)
+	umu.Lock()
+	defer umu.Unlock()
+
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -376,6 +482,7 @@ func (c *WeixinChannel) sendMessage(ctx context.Context, toUserID, content strin
 				toUserID, err, resp.Ret, resp.Errcode)
 			return "", false
 		}
+		logger.Warnf("[weixin] Context token not found for user %s, fetching via GetConfig...", toUserID)
 		token := strings.TrimSpace(resp.ContextToken)
 		if token == "" {
 			token = strings.TrimSpace(resp.TypingTicket)
@@ -387,6 +494,7 @@ func (c *WeixinChannel) sendMessage(ctx context.Context, toUserID, content strin
 		logger.Infof("[weixin] save %s token %s", toUserID, token)
 		c.contextTokens.Store(toUserID, token)
 		c.persistContextTokens()
+		time.Sleep(500 * time.Millisecond)
 		return token, true
 	}
 
@@ -394,7 +502,9 @@ func (c *WeixinChannel) sendMessage(ctx context.Context, toUserID, content strin
 		return SendMessageReq{
 			Msg: WeixinMessage{
 				ToUserID:     toUserID,
-				ClientID:     uuid.New().String(),
+				ClientID:     "dogclaw-" + uuid.New().String(),
+				MessageType:  MessageTypeBot,
+				MessageState: MessageStateFinish,
 				ContextToken: token,
 				ItemList: []MessageItem{
 					{
@@ -413,6 +523,7 @@ func (c *WeixinChannel) sendMessage(ctx context.Context, toUserID, content strin
 			return
 		}
 
+		logger.Infof("[weixin] Sending message to %s using token: %s... (attempt %d)", toUserID, contextToken[:20], attempt+1)
 		resp, err := c.api.SendMessage(ctx, buildReq(contextToken))
 		if err != nil {
 			logger.Errorf("[weixin] (Attempt %d) Failed to send message to %s: %v", attempt+1, toUserID, err)
@@ -427,30 +538,54 @@ func (c *WeixinChannel) sendMessage(ctx context.Context, toUserID, content strin
 		logger.Errorf("[weixin] (Attempt %d) SendMessage API error for %s: ret=%d errcode=%d errmsg=%s",
 			attempt+1, toUserID, resp.Ret, resp.Errcode, resp.Errmsg)
 
-		// Handle specific errors
 		if isSessionExpiredStatus(resp.Ret, resp.Errcode) {
 			logger.Warnf("[weixin] Session expired, deleting context token for %s and retrying (attempt %d/%d)...", toUserID, attempt+1, maxRetries)
 			c.contextTokens.Delete(toUserID)
 			continue
 		}
 
-		if resp.Ret == -2 {
-			logger.Warnf("[weixin] Token invalid (ret=-2) for user %s, deleting all caches and retrying (attempt %d/%d)...", toUserID, attempt+1, maxRetries)
-			// 清除 context token
-			c.contextTokens.Delete(toUserID)
-			// 也清除 typing ticket 缓存，强制重新获取
-			c.typingMu.Lock()
-			delete(c.typingCache, toUserID)
-			c.typingMu.Unlock()
-			if attempt < maxRetries {
-				time.Sleep(1 * time.Second)
-				continue
-			}
-		}
-
-		// For other errors or if retries exhausted, give up
 		break
 	}
+
+	c.addToRetryQueue(toUserID, content)
+}
+
+func (c *WeixinChannel) addToRetryQueue(toUserID, content string) {
+	c.retryMu.Lock()
+	defer c.retryMu.Unlock()
+	const maxQueueSize = 100
+	if len(c.retryQueue) >= maxQueueSize {
+		logger.Warnf("[weixin] Retry queue full, dropping oldest entry for %s", toUserID)
+		c.retryQueue = c.retryQueue[1:]
+	}
+	c.retryQueue = append(c.retryQueue, retryEntry{
+		ToUserID: toUserID,
+		Content:  content,
+		Retries:  0,
+		NextTry:  time.Now().Add(5 * time.Second),
+	})
+	logger.Infof("[weixin] Added message to retry queue for %s (queue size: %d)", toUserID, len(c.retryQueue))
+}
+
+func (c *WeixinChannel) processRetryQueue(ctx context.Context) {
+	c.retryMu.Lock()
+	if len(c.retryQueue) == 0 {
+		c.retryMu.Unlock()
+		return
+	}
+	now := time.Now()
+	var pending []retryEntry
+	for _, entry := range c.retryQueue {
+		if now.Before(entry.NextTry) {
+			pending = append(pending, entry)
+			continue
+		}
+		c.retryMu.Unlock()
+		c.sendMessage(ctx, entry.ToUserID, entry.Content)
+		c.retryMu.Lock()
+	}
+	c.retryQueue = pending
+	c.retryMu.Unlock()
 }
 
 func (c *WeixinChannel) isAllowedSender(senderID string) bool {

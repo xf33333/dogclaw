@@ -100,7 +100,7 @@ func (c *ApiClient) post(ctx context.Context, endpoint string, body any, respons
 	req.Header["iLink-App-ClientVersion"] = []string{strconv.Itoa(weixinClientVersion)}
 	if endpoint != "ilink/bot/get_bot_qrcode" && endpoint != "ilink/bot/get_qrcode_status" {
 		req.Header["AuthorizationType"] = []string{"ilink_bot_token"}
-		req.Header["X-WECHAT-UIN"] = []string{c.uin}
+		req.Header["X-WECHAT-UIN"] = []string{randomWechatUIN()}
 		if c.Token != "" {
 			req.Header.Set("Authorization", "Bearer "+c.Token)
 		}
@@ -195,7 +195,7 @@ func (c *ApiClient) getQR(ctx context.Context, endpoint string, query map[string
 	}
 	req.Header["iLink-App-Id"] = []string{weixinIlinkAppID}
 	req.Header["iLink-App-ClientVersion"] = []string{strconv.Itoa(weixinClientVersion)}
-	req.Header["X-WECHAT-UIN"] = []string{c.uin}
+	req.Header["X-WECHAT-UIN"] = []string{randomWechatUIN()}
 
 	resp, err := c.HttpClient.Do(req)
 	if err != nil {

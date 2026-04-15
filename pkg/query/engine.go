@@ -85,7 +85,8 @@ type QueryEngine struct {
 	// TextCallback is called each time the LLM emits a text block during SubmitMessage,
 	// including turns that also contain tool calls. This allows channels to forward
 	// intermediate LLM commentary in real-time without waiting for the full loop to finish.
-	TextCallback func(text string)
+	// isFinish is true when this is the final text block of the conversation.
+	TextCallback func(text string, isFinish bool)
 
 	// LastTurnToolCalls records the last turn's tool use blocks (for channels to consume after SubmitMessage)
 	LastTurnToolCalls []ToolCallInfo
@@ -2089,6 +2090,7 @@ func BuildSystemPrompt(tools []types.Tool, loadedSkills []*skills.Skill, customP
 		}
 		sb.WriteString(fmt.Sprintf("- **%s**: %s\n", tool.Name(),
 			tool.Description(nil, types.ToolDescriptionOptions{})))
+		//sb.WriteString(fmt.Sprintf("- %s \n", tool.Name()))
 	}
 
 	if len(loadedSkills) > 0 {
@@ -2098,7 +2100,7 @@ func BuildSystemPrompt(tools []types.Tool, loadedSkills []*skills.Skill, customP
 		//sb.WriteString("- For complex skills (multiple files), manually create ~/.dogclaw/skills/<skill-name>/ and write SKILL.md plus any other assets using file tools.\n\n")
 		for _, s := range loadedSkills {
 			//sb.WriteString(fmt.Sprintf("- **%s**: %s\n", s.Name, s.Description))
-			sb.WriteString(fmt.Sprintf("- **%s**\n", s.Name))
+			sb.WriteString(fmt.Sprintf("- %s \n", s.Name))
 		}
 	}
 

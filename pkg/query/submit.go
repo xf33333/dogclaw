@@ -319,7 +319,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 		err := qe.handleSlashCommand(ctx, prompt)
 		// Fire TextCallback so channels (Weixin, QQ, etc.) receive slash command output
 		if qe.TextCallback != nil && qe.lastAssistantText != "" {
-			qe.TextCallback(qe.lastAssistantText)
+			qe.TextCallback(qe.lastAssistantText, true)
 		}
 		return err
 	}
@@ -360,7 +360,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 					seconds := int(elapsed.Seconds()) % 60
 					stopMsg := fmt.Sprintf("对话已终止。本次对话用时：%d分%d秒", minutes, seconds)
 					if qe.TextCallback != nil {
-						qe.TextCallback(stopMsg)
+						qe.TextCallback(stopMsg, true)
 					}
 					qe.logger.Info(stopMsg)
 					return nil
@@ -423,7 +423,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 				compactionMsg := fmt.Sprintf("🔄 正在压缩上下文... (%d 条消息, %d tokens)",
 					len(qe.messages), tokenCount)
 				if qe.TextCallback != nil {
-					qe.TextCallback(compactionMsg)
+					qe.TextCallback(compactionMsg, false)
 				}
 				qe.logger.Info(compactionMsg)
 
@@ -441,7 +441,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 						result.OriginalMessageCount, result.CompactedMessageCount,
 						result.PreCompactTokenCount, result.PostCompactTokenCount)
 					if qe.TextCallback != nil {
-						qe.TextCallback(compactionResult)
+						qe.TextCallback(compactionResult, false)
 					}
 					qe.logger.Info(compactionResult)
 
@@ -654,7 +654,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 				// to channels immediately via TextCallback so users see LLM commentary
 				// in real-time rather than waiting for the full loop to finish.
 				if hasToolUse && qe.TextCallback != nil {
-					qe.TextCallback(userText)
+					qe.TextCallback(userText, false)
 				}
 			} else if hasToolUse {
 				// Tool-only turn: no text to show, leave lastAssistantText as-is
@@ -677,7 +677,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 				// Since len(toolUseBlocks)==0 here, this IS the text-only final turn —
 				// fire the callback so channels receive it even inside multi-turn loops.
 				if qe.TextCallback != nil {
-					qe.TextCallback(qe.lastAssistantText)
+					qe.TextCallback(qe.lastAssistantText, false)
 				}
 			} else {
 				// LLM returned no text at all (e.g. only thinking blocks)
@@ -691,7 +691,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 			seconds := int(elapsed.Seconds()) % 60
 			timeMsg := fmt.Sprintf("本次对话用时：%d分%d秒", minutes, seconds)
 			if qe.TextCallback != nil {
-				qe.TextCallback(timeMsg)
+				qe.TextCallback(timeMsg, true)
 			}
 			qe.logger.Info(timeMsg)
 
@@ -829,7 +829,7 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 					qe.ClearUserInputQueue()
 					stopMsg := "对话已终止。"
 					if qe.TextCallback != nil {
-						qe.TextCallback(stopMsg)
+						qe.TextCallback(stopMsg, true)
 					}
 					qe.logger.Info(stopMsg)
 					return nil
@@ -868,7 +868,7 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 					seconds := int(elapsed.Seconds()) % 60
 					stopMsg := fmt.Sprintf("对话已终止。本次对话用时：%d分%d秒", minutes, seconds)
 					if qe.TextCallback != nil {
-						qe.TextCallback(stopMsg)
+						qe.TextCallback(stopMsg, true)
 					}
 					qe.logger.Info(stopMsg)
 					return nil
@@ -910,7 +910,7 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 				compactionMsg := fmt.Sprintf("🔄 正在压缩上下文... (%d 条消息, %d tokens)",
 					len(qe.messages), tokenCount)
 				if qe.TextCallback != nil {
-					qe.TextCallback(compactionMsg)
+					qe.TextCallback(compactionMsg, false)
 				}
 				qe.logger.Info(compactionMsg)
 
@@ -928,7 +928,7 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 						result.OriginalMessageCount, result.CompactedMessageCount,
 						result.PreCompactTokenCount, result.PostCompactTokenCount)
 					if qe.TextCallback != nil {
-						qe.TextCallback(compactionResult)
+						qe.TextCallback(compactionResult, false)
 					}
 					qe.logger.Info(compactionResult)
 
@@ -1123,7 +1123,7 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 			seconds := int(elapsed.Seconds()) % 60
 			timeMsg := fmt.Sprintf("本次对话用时：%d分%d秒", minutes, seconds)
 			if qe.TextCallback != nil {
-				qe.TextCallback(timeMsg)
+				qe.TextCallback(timeMsg, true)
 			}
 			qe.logger.Info(timeMsg)
 

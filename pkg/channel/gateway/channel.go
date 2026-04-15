@@ -383,7 +383,7 @@ func (c *Channel) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// TextCallback: fires for every LLM text block (intermediate turns with tools
 	// and the final text-only reply). Run in goroutine to avoid blocking.
-	qe.TextCallback = func(text string) {
+	qe.TextCallback = func(text string, isFinish bool) {
 		go func() {
 			msg := WebSocketMessage{
 				Type:    MessageTypeTextChunk,

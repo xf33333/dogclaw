@@ -409,11 +409,11 @@ type OpenAICompatibleRequest struct {
 // OpenAIMessage represents a message in OpenAI format
 type OpenAIMessage struct {
 	Role             string           `json:"role"`
-	Content          any              `json:"content"` // string, nil, or []OpenAIContentBlock
+	Content          any              `json:"content"`                     // string, nil, or []OpenAIContentBlock
 	ReasoningContent string           `json:"reasoning_content,omitempty"` // For thinking models
 	Name             string           `json:"name,omitempty"`
-	ToolCalls  []OpenAIToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
+	ToolCalls        []OpenAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string           `json:"tool_call_id,omitempty"`
 }
 
 // OpenAIContentBlock represents content in a message
@@ -556,7 +556,7 @@ func (c *Client) SendMessage(ctx context.Context, req *MessageRequest) (*Message
 func (c *Client) sendAnthropicRequest(ctx context.Context, req *MessageRequest) (*MessageResponse, error) {
 
 	body, err := json.Marshal(req)
-	logger.GetGlobalLogger().Info("[SendAnthropicRequest] Sending Anthropic request %v", string(body))
+	logger.GetGlobalLogger().Info("[SendAnthropicRequest] Sending Anthropic request ", string(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -671,7 +671,7 @@ func (c *Client) doAnthropicRequest(ctx context.Context, body []byte) (*MessageR
 	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
 	httpReq.Header.Set("anthropic-version", anthropicAPIVersion)
 
-	logger.GetGlobalLogger().Info("[Anthropic] Sending request to %s  ", c.BaseURL+"/v1/messages")
+	logger.GetGlobalLogger().Info("[Anthropic] Sending request to   ", c.BaseURL+"/v1/messages")
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
 		return nil, c.wrapNetworkError(ctx, err)
@@ -720,6 +720,7 @@ func (c *Client) sendOpenAICompatibleRequest(ctx context.Context, req *MessageRe
 	endpoint := c.BaseURL + "/chat/completions"
 	//}
 
+	logger.GetGlobalLogger().Info("[OpenAI] Sending OpenAI request ", string(body))
 	// Track consecutive failures for leaky bucket adjustment
 	var consecutiveTimeouts int
 
@@ -1207,7 +1208,7 @@ func (c *Client) convertFromOpenAIResponse(resp *OpenAIResponse) *MessageRespons
 	message := choice.Message
 
 	var contentBlocks []ContentBlock
-	
+
 	// Add reasoning content if present (common in DeepSeek or OpenAI o1 via proxies)
 	if message.ReasoningContent != "" {
 		contentBlocks = append(contentBlocks, ContentBlock{

@@ -258,7 +258,7 @@ func (c *Channel) getOrCreateSession(chatID, creator string, newEngine channel.E
 	// TextCallback: fires for every LLM text block (intermediate turns with tools
 	// and the final text-only reply).
 	// Run in goroutine to avoid blocking the query engine loop if platform API is slow.
-	engine.TextCallback = func(text string) {
+	engine.TextCallback = func(text string, isFinish bool) {
 		go sendFn(chatID, text)
 	}
 	// ToolCallCallback: sends a brief notification when a tool is called

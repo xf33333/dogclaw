@@ -121,15 +121,17 @@ func printUsage() {
 	fmt.Println("  --version                    Show version information")
 	fmt.Println()
 	fmt.Println("Modes:")
-	fmt.Println("  agent    CLI interactive mode for direct communication")
-	fmt.Println("  gateway  Starts all configured channels (QQ, Weixin, etc.)")
-	fmt.Println("  onboard  Interactive setup for models and channels")
+	fmt.Println("  agent       CLI interactive mode for direct communication")
+	fmt.Println("  gateway     Starts all configured channels (QQ, Weixin, etc.)")
+	fmt.Println("  onboard     Interactive setup for models and channels")
+	fmt.Println("  weixin-test Test Weixin channel with continuous send (1-30)")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  dogclaw agent")
 	fmt.Println("  dogclaw --config /path/to/config.json gateway")
 	fmt.Println("  dogclaw -c ./myconfig.json onboard")
 	fmt.Println("  dogclaw --compact")
+	fmt.Println("  dogclaw weixin-test")
 }
 
 func main() {
@@ -239,7 +241,7 @@ func main() {
 		// Mode specified via command line
 		startupMode = StartupMode(modeArgs[0])
 		if startupMode != ModeAgent && startupMode != ModeGateway && startupMode != ModeOnboard {
-			fmt.Printf("❌ Error: Invalid mode '%s'. Must be 'agent', 'gateway' or 'onboard'\n", modeArgs[0])
+			fmt.Printf("❌ Error: Invalid mode '%s'. Must be 'agent', 'gateway', 'onboard' '\n", modeArgs[0])
 			printUsage()
 			os.Exit(1)
 		}
@@ -329,6 +331,7 @@ func main() {
 			fmt.Printf("❌ Onboarding failed: %v\n", err)
 			os.Exit(1)
 		}
+
 	}
 }
 
@@ -362,7 +365,7 @@ func runAgent(cfg *config.Config, settings *config.Settings, multiProjectMode bo
 
 	// TextCallback: fires for every LLM text block (intermediate turns with tools
 	// and the final text-only reply). Print immediately for real-time feedback.
-	qe.TextCallback = func(text string) {
+	qe.TextCallback = func(text string, isFinish bool) {
 		tm.Println(text)
 	}
 
