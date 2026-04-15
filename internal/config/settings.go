@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"dogclaw/pkg/compact"
 )
@@ -294,10 +295,11 @@ func (s *Settings) GetActive() (*ProviderModel, error) {
 	return nil, fmt.Errorf("active alias %q not found in providers", s.ActiveAlias)
 }
 
-// GetByAlias returns the ProviderModel matching the given alias.
+// GetByAlias returns the ProviderModel matching the given alias (case-insensitive).
 func (s *Settings) GetByAlias(alias string) (*ProviderModel, error) {
+	aliasLower := strings.ToLower(alias)
 	for _, pm := range s.Providers {
-		if pm.Alias == alias {
+		if strings.ToLower(pm.Alias) == aliasLower {
 			return &pm, nil
 		}
 	}

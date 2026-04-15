@@ -332,11 +332,49 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 
 	case "model":
 		_, args := slash.ParseCommand(input)
-		if args != "" {
-			qe.modelName = strings.ToLower(args)
-			qe.client.Model = qe.modelName
+		args = strings.TrimSpace(args)
+		if args == "" {
+			var sb strings.Builder
+			sb.WriteString("Available models:\n")
+			if qe.settings == nil || len(qe.settings.Providers) == 0 {
+				sb.WriteString("  No models configured.\n")
+			} else {
+				for _, pm := range qe.settings.Providers {
+					marker := "  "
+					if pm.Alias == qe.settings.ActiveAlias {
+						marker = "* "
+					}
+					sb.WriteString(fmt.Sprintf("%s%s: %s (%s)\n", marker, pm.Alias, pm.Model, pm.Provider))
+				}
+			}
+			sb.WriteString("\nCurrent: " + qe.settings.ActiveAlias)
+			qe.lastAssistantText = sb.String()
+			qe.logger.Info(sb.String())
+		} else {
+			pm, err := qe.settings.GetByAlias(args)
+			if err != nil {
+				errMsg := fmt.Sprintf("Unknown model alias: '%s'. Use /model to see available models.", args)
+				qe.lastAssistantText = errMsg
+				qe.logger.Info(errMsg)
+				return nil
+			}
+			qe.settings.ActiveAlias = pm.Alias
+			qe.modelName = pm.Model
+			qe.client.Model = pm.Model
+			qe.fastModeManager.SetModel(pm.Model)
+			if pm.URL != "" {
+				qe.client.BaseURL = pm.URL
+			}
+			if pm.APIKey != "" {
+				qe.client.APIKey = pm.APIKey
+			}
+			if pm.Provider != "" {
+				qe.client.Provider = api.ProviderType(pm.Provider)
+			}
+			msg := fmt.Sprintf("✓ Switched to model: %s (%s)", pm.Alias, pm.Model)
+			qe.lastAssistantText = msg
+			qe.logger.Info(msg)
 		}
-		qe.logger.Info(result.Output)
 
 	case "verbose":
 		qe.verbose = !qe.verbose
@@ -991,6 +1029,7 @@ func (qe *QueryEngine) GetSkillRegistry() *slash.SkillRegistry {
 func (qe *QueryEngine) SetModel(model string) {
 	qe.modelName = model
 	qe.client.Model = model
+	qe.fastModeManager.SetModel(model)
 }
 
 // SetThinkingConfig sets the thinking configuration

@@ -1431,6 +1431,8 @@ func isContextLengthExceededError(body string, provider string) bool {
 		if strings.Contains(bodyLower, "maximum context length") ||
 			strings.Contains(bodyLower, "context_length_exceeded") ||
 			strings.Contains(bodyLower, "prompt is too long") ||
+			strings.Contains(bodyLower, "prompt too long") ||
+			strings.Contains(bodyLower, "tokens exceeds max context") ||
 			strings.Contains(bodyLower, "reduce the length") ||
 			strings.Contains(bodyLower, "exceeds the maximum length") ||
 			strings.Contains(bodyLower, "maximum length exceeded") ||

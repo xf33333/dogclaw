@@ -234,7 +234,7 @@ func RegisterBuiltinCommands(registry *CommandRegistry) {
 			return &CommandResult{Output: ""}, nil // handled in engine
 		},
 	})
-	
+
 	registry.Register(&Command{
 		Name:        "restart",
 		Aliases:     []string{"reboot"},
@@ -317,7 +317,7 @@ func HandleHelp(ctx context.Context, args string) (*CommandResult, error) {
 
 🔧 工具命令:
   /usage, /cost          - 显示 token 使用统计
-  /model <name>, /m <n>  - 切换模型 (sonnet/opus/haiku)
+  /model [alias], /m [a] - 列出或切换模型别名
   /compact               - 手动触发上下文压缩
   /verbose, /v           - 切换详细模式
   /skills                - 列出可用技能
@@ -347,28 +347,10 @@ func HandleUsage(ctx context.Context, args string) (*CommandResult, error) {
 	}, nil
 }
 
-// HandleModel switches model
+// HandleModel switches model - actual logic in engine.handleSlashCommand
 func HandleModel(ctx context.Context, args string) (*CommandResult, error) {
-	if args == "" {
-		return &CommandResult{
-			Output: "Current model: sonnet. Usage: /model <sonnet|opus|haiku>",
-		}, nil
-	}
-
-	model := strings.ToLower(args)
-	validModels := map[string]bool{
-		"sonnet": true, "opus": true, "haiku": true,
-	}
-
-	if !validModels[model] {
-		return &CommandResult{
-			IsError:  true,
-			ErrorMsg: fmt.Sprintf("Unknown model: %s. Available: sonnet, opus, haiku", model),
-		}, nil
-	}
-
 	return &CommandResult{
-		Output: fmt.Sprintf("Model switched to: %s", model),
+		Output: "",
 	}, nil
 }
 
