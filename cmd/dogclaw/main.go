@@ -489,7 +489,7 @@ func newEngineFactory(cfg *config.Config, settings *config.Settings, registry *c
 	return func(channelName string) *query.QueryEngine {
 		client := api.NewClient(cfg.APIKey, cfg.Model, cfg.BaseURL, cfg.Provider)
 		toolList := buildTools(registry)
-
+		toolList = append(toolList, experience.NewExperienceTool(expManager))
 		// Determine working directory based on multiProjectMode
 		var cwd string
 		if multiProjectMode {

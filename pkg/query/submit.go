@@ -689,7 +689,26 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 			elapsed := qe.conversationEndTime.Sub(qe.conversationStartTime)
 			minutes := int(elapsed.Minutes())
 			seconds := int(elapsed.Seconds()) % 60
-			timeMsg := fmt.Sprintf("本次对话用时：%d分%d秒", minutes, seconds)
+			
+			// Build time and token usage message
+			var msgParts []string
+			msgParts = append(msgParts, fmt.Sprintf("本次对话用时：%d分%d秒", minutes, seconds))
+			
+			// Add token usage statistics
+			if qe.usageTracker != nil && qe.usageTracker.TotalTokens() > 0 {
+				msgParts = append(msgParts, fmt.Sprintf("Token使用：输入 %s，输出 %s", 
+					usage.FormatTokens(qe.usageTracker.TotalInput), 
+					usage.FormatTokens(qe.usageTracker.TotalOutput)))
+				if qe.usageTracker.TotalCacheRead > 0 {
+					msgParts = append(msgParts, fmt.Sprintf("缓存读取 %s", usage.FormatTokens(qe.usageTracker.TotalCacheRead)))
+				}
+				if qe.usageTracker.TotalCacheCreation > 0 {
+					msgParts = append(msgParts, fmt.Sprintf("缓存写入 %s", usage.FormatTokens(qe.usageTracker.TotalCacheCreation)))
+				}
+				msgParts = append(msgParts, fmt.Sprintf("总计 %s", usage.FormatTokens(qe.usageTracker.TotalTokens())))
+			}
+			
+			timeMsg := strings.Join(msgParts, "，")
 			if qe.TextCallback != nil {
 				qe.TextCallback(timeMsg, true)
 			}
