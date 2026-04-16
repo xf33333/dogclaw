@@ -22,6 +22,7 @@ import (
 	"dogclaw/pkg/compact"
 	"dogclaw/pkg/compactmem"
 	"dogclaw/pkg/core"
+	"dogclaw/pkg/experience"
 	"dogclaw/pkg/fastmode"
 	"dogclaw/pkg/history"
 	"dogclaw/pkg/mcp"
@@ -118,6 +119,9 @@ type QueryEngine struct {
 
 	// MCP manager
 	mcpManager *mcp.Manager
+
+	// Experience manager
+	experienceManager *experience.Manager
 
 	// Conversation timing
 	conversationStartTime time.Time // 对话开始时间戳
@@ -1068,6 +1072,23 @@ func (qe *QueryEngine) SetSettings(settings *config.Settings) {
 		if settings.MCP != nil && settings.MCP.Enabled {
 			qe.initializeMCP()
 		}
+	}
+}
+
+func (qe *QueryEngine) SetExperienceManager(manager *experience.Manager) {
+	qe.experienceManager = manager
+
+	if manager != nil {
+		qe.cmdRegistry.Register(&slash.Command{
+			Name:        "experience",
+			Aliases:     []string{"exp"},
+			Description: "Manage experience summaries (list/read/summary/regenerate)",
+			Type:        slash.LocalCommand,
+			Source:      "builtin",
+			Handler: func(ctx context.Context, args string) (*slash.CommandResult, error) {
+				return slash.HandleExperience(ctx, args, manager)
+			},
+		})
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"dogclaw/internal/api"
 	"dogclaw/internal/config"
+	"dogclaw/internal/logger"
 	"dogclaw/pkg/channel"
 	"dogclaw/pkg/channel/cli"
 	"dogclaw/pkg/channel/gateway"
@@ -12,6 +13,8 @@ import (
 	"dogclaw/pkg/channel/weixin"
 	"dogclaw/pkg/commands"
 	"dogclaw/pkg/compact"
+	"dogclaw/pkg/experience"
+	"dogclaw/pkg/heartbeat"
 	"dogclaw/pkg/query"
 	"dogclaw/pkg/skills"
 	"dogclaw/pkg/slash"
@@ -28,6 +31,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // StartupMode represents the mode the program runs in
@@ -344,6 +348,44 @@ func runAgent(cfg *config.Config, settings *config.Settings, multiProjectMode bo
 		os.Remove(restartFlagPath)
 	}
 
+	// Initialize heartbeat manager if enabled
+	var hbManager *heartbeat.Manager
+	if settings.EnableHeartbeat {
+		interval := 5 * time.Minute // default 5 minutes
+		if settings.HeartbeatInterval > 0 {
+			interval = time.Duration(settings.HeartbeatInterval) * time.Second
+		}
+		hbManager = heartbeat.NewManager(&heartbeat.Config{
+			Interval:         interval,
+			StartImmediately: true,
+		})
+		logger.Info("[Main] Heartbeat manager initialized")
+	}
+
+	// Initialize experience manager (always, but only register with heartbeat if enabled)
+	var cwd string
+	if multiProjectMode {
+		cwd, _ = os.Getwd()
+	} else {
+		home, _ := os.UserHomeDir()
+		cwd = filepath.Join(home, ".dogclaw", "workspace")
+	}
+
+	client := api.NewClient(cfg.APIKey, cfg.Model, cfg.BaseURL, cfg.Provider)
+	expManager, err := experience.NewManager(&experience.ManagerConfig{
+		WorkingDir: cwd,
+		APIClient:  client,
+		HBManager:  hbManager, // will be nil if heartbeat is disabled
+	})
+	if err != nil {
+		logger.Errorf("[Main] Failed to initialize experience manager: %v", err)
+	} else {
+		logger.Info("[Main] Experience manager initialized")
+		if hbManager != nil {
+			logger.Info("[Main] Experience manager registered with heartbeat")
+		}
+	}
+
 	fmt.Println("🦞 DogClaw - AI Assistant (Go Implementation)")
 	fmt.Println("Type your message or /help for commands. Ctrl+C to exit.")
 	fmt.Println()
@@ -360,7 +402,7 @@ func runAgent(cfg *config.Config, settings *config.Settings, multiProjectMode bo
 	registry := channel.NewRegistry()
 	registry.Register("cli", cli.NewChannel())
 
-	engineFactory := newEngineFactory(cfg, settings, registry, multiProjectMode)
+	engineFactory := newEngineFactory(cfg, settings, registry, multiProjectMode, expManager)
 	qe := engineFactory("cli")
 
 	// TextCallback: fires for every LLM text block (intermediate turns with tools
@@ -397,6 +439,10 @@ func runAgent(cfg *config.Config, settings *config.Settings, multiProjectMode bo
 		if slash.IsSlashCommand(input) {
 			cmd, _ := slash.ParseCommand(input)
 			if cmd == "exit" || cmd == "quit" || cmd == "q" {
+				// Stop heartbeat manager before exit
+				if hbManager != nil {
+					hbManager.Stop()
+				}
 				tm.Println("👋 Goodbye!")
 				return
 			}
@@ -439,7 +485,7 @@ func buildTools(registry *channel.Registry) []types.Tool {
 }
 
 // newEngineFactory creates a factory function for building QueryEngine instances
-func newEngineFactory(cfg *config.Config, settings *config.Settings, registry *channel.Registry, multiProjectMode bool) func(channelName string) *query.QueryEngine {
+func newEngineFactory(cfg *config.Config, settings *config.Settings, registry *channel.Registry, multiProjectMode bool, expManager *experience.Manager) func(channelName string) *query.QueryEngine {
 	return func(channelName string) *query.QueryEngine {
 		client := api.NewClient(cfg.APIKey, cfg.Model, cfg.BaseURL, cfg.Provider)
 		toolList := buildTools(registry)
@@ -481,6 +527,11 @@ func newEngineFactory(cfg *config.Config, settings *config.Settings, registry *c
 		// Set settings
 		qe.SetSettings(settings)
 
+		// Set experience manager if provided
+		if expManager != nil {
+			qe.SetExperienceManager(expManager)
+		}
+
 		return qe
 	}
 }
@@ -489,6 +540,44 @@ func newEngineFactory(cfg *config.Config, settings *config.Settings, registry *c
 func runGateway(cfg *config.Config, settings *config.Settings, stopChan <-chan os.Signal, multiProjectMode bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Initialize heartbeat manager if enabled
+	var hbManager *heartbeat.Manager
+	if settings.EnableHeartbeat {
+		interval := 5 * time.Minute // default 5 minutes
+		if settings.HeartbeatInterval > 0 {
+			interval = time.Duration(settings.HeartbeatInterval) * time.Second
+		}
+		hbManager = heartbeat.NewManager(&heartbeat.Config{
+			Interval:         interval,
+			StartImmediately: true,
+		})
+		logger.Info("[Main] Heartbeat manager initialized")
+	}
+
+	// Initialize experience manager (always, but only register with heartbeat if enabled)
+	var cwd string
+	if multiProjectMode {
+		cwd, _ = os.Getwd()
+	} else {
+		home, _ := os.UserHomeDir()
+		cwd = filepath.Join(home, ".dogclaw", "workspace")
+	}
+
+	client := api.NewClient(cfg.APIKey, cfg.Model, cfg.BaseURL, cfg.Provider)
+	expManager, err := experience.NewManager(&experience.ManagerConfig{
+		WorkingDir: cwd,
+		APIClient:  client,
+		HBManager:  hbManager, // will be nil if heartbeat is disabled
+	})
+	if err != nil {
+		logger.Errorf("[Main] Failed to initialize experience manager: %v", err)
+	} else {
+		logger.Info("[Main] Experience manager initialized")
+		if hbManager != nil {
+			logger.Info("[Main] Experience manager registered with heartbeat")
+		}
+	}
 
 	// Initialize channel registry for Gateway mode
 	registry := channel.NewRegistry()
@@ -539,7 +628,7 @@ func runGateway(cfg *config.Config, settings *config.Settings, stopChan <-chan o
 	}
 
 	// Start cron scheduler
-	engineFactory := newEngineFactory(cfg, settings, registry, multiProjectMode)
+	engineFactory := newEngineFactory(cfg, settings, registry, multiProjectMode, expManager)
 	cronScheduler := cron.NewScheduler(engineFactory)
 	cronScheduler.Start(ctx)
 
@@ -555,6 +644,12 @@ func runGateway(cfg *config.Config, settings *config.Settings, stopChan <-chan o
 	sig, e := <-stopChan
 	fmt.Printf("\n📥 Received %v, shutting down... err %v\n", sig, e)
 	cancel()
+
+	// Stop heartbeat manager
+	if hbManager != nil {
+		hbManager.Stop()
+	}
+
 	for _, ch := range channels {
 		ch.Stop()
 	}

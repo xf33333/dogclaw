@@ -84,6 +84,10 @@ type Settings struct {
 	// AutoCompact configuration (LLM-assisted context compression)
 	AutoCompact *AutoCompactSettings `json:"autoCompact,omitempty"`
 
+	// Heartbeat configuration
+	EnableHeartbeat   bool `json:"enableHeartbeat"`   // 是否启用心跳
+	HeartbeatInterval int  `json:"heartbeatInterval"` // 心跳间隔(秒)，默认300秒(5分钟)
+
 	// Other parameters
 	MaxTurns             int     `json:"maxTurns"`
 	MaxTokens            int     `json:"maxTokens"`        // 单次响应最大 token 数
