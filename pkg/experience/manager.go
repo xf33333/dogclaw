@@ -169,6 +169,12 @@ func (m *Manager) registerWithHeartbeat() error {
 	return nil
 }
 
+// SetHeartbeatManager 设置心跳管理器并注册任务
+func (m *Manager) SetHeartbeatManager(hbManager *heartbeat.Manager) error {
+	m.hbManager = hbManager
+	return m.registerWithHeartbeat()
+}
+
 // ExperienceHeartbeatTask 经验系统心跳任务
 type ExperienceHeartbeatTask struct {
 	manager *Manager

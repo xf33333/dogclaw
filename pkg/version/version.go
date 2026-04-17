@@ -11,7 +11,7 @@ var (
 
 // GetVersionString 返回格式化的版本信息字符串
 func GetVersionString() string {
-	return fmt.Sprintf("🦞 DogClaw - AI Assistant (Go Implementation)\n"+
+	return fmt.Sprintf("🦞 DogClaw - AI Assistant\n"+
 		"   Version: %s\n"+
 		"   Commit:  %s\n"+
 		"   Built:   %s",

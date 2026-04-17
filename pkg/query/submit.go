@@ -314,6 +314,9 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 	// Record conversation start time
 	qe.conversationStartTime = time.Now()
 
+	// Initialize conversation usage tracker (only for current conversation)
+	qe.conversationUsageTracker = &usage.AccumulatedUsage{}
+
 	// Check if this is a slash command BEFORE triggering any LLM operations (like memory initialization)
 	if slash.IsSlashCommand(prompt) {
 		err := qe.handleSlashCommand(ctx, prompt)
@@ -358,7 +361,23 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 					elapsed := qe.conversationEndTime.Sub(qe.conversationStartTime)
 					minutes := int(elapsed.Minutes())
 					seconds := int(elapsed.Seconds()) % 60
-					stopMsg := fmt.Sprintf("对话已终止。本次对话用时：%d分%d秒", minutes, seconds)
+
+					// Build stop message with token usage
+					var msgParts []string
+					msgParts = append(msgParts, fmt.Sprintf("对话已终止。本次对话用时：%d分%d秒", minutes, seconds))
+					if qe.conversationUsageTracker != nil && qe.conversationUsageTracker.TotalTokens() > 0 {
+						msgParts = append(msgParts, fmt.Sprintf("Token使用：输入 %s，输出 %s",
+							usage.FormatTokens(qe.conversationUsageTracker.TotalInput),
+							usage.FormatTokens(qe.conversationUsageTracker.TotalOutput)))
+						if qe.conversationUsageTracker.TotalCacheRead > 0 {
+							msgParts = append(msgParts, fmt.Sprintf("缓存读取 %s", usage.FormatTokens(qe.conversationUsageTracker.TotalCacheRead)))
+						}
+						if qe.conversationUsageTracker.TotalCacheCreation > 0 {
+							msgParts = append(msgParts, fmt.Sprintf("缓存写入 %s", usage.FormatTokens(qe.conversationUsageTracker.TotalCacheCreation)))
+						}
+						msgParts = append(msgParts, fmt.Sprintf("总计 %s", usage.FormatTokens(qe.conversationUsageTracker.TotalTokens())))
+					}
+					stopMsg := strings.Join(msgParts, "，")
 					if qe.TextCallback != nil {
 						qe.TextCallback(stopMsg, true)
 					}
@@ -563,6 +582,10 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 				CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
 			}
 			qe.usageTracker.Add(tokenUsage)
+			// Also track for current conversation
+			if qe.conversationUsageTracker != nil {
+				qe.conversationUsageTracker.Add(tokenUsage)
+			}
 		}
 
 		// Build assistant message content blocks
@@ -689,25 +712,25 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 			elapsed := qe.conversationEndTime.Sub(qe.conversationStartTime)
 			minutes := int(elapsed.Minutes())
 			seconds := int(elapsed.Seconds()) % 60
-			
+
 			// Build time and token usage message
 			var msgParts []string
 			msgParts = append(msgParts, fmt.Sprintf("本次对话用时：%d分%d秒", minutes, seconds))
-			
-			// Add token usage statistics
-			if qe.usageTracker != nil && qe.usageTracker.TotalTokens() > 0 {
-				msgParts = append(msgParts, fmt.Sprintf("Token使用：输入 %s，输出 %s", 
-					usage.FormatTokens(qe.usageTracker.TotalInput), 
-					usage.FormatTokens(qe.usageTracker.TotalOutput)))
-				if qe.usageTracker.TotalCacheRead > 0 {
-					msgParts = append(msgParts, fmt.Sprintf("缓存读取 %s", usage.FormatTokens(qe.usageTracker.TotalCacheRead)))
+
+			// Add token usage statistics (use conversation-specific tracker)
+			if qe.conversationUsageTracker != nil && qe.conversationUsageTracker.TotalTokens() > 0 {
+				msgParts = append(msgParts, fmt.Sprintf("Token使用：输入 %s，输出 %s",
+					usage.FormatTokens(qe.conversationUsageTracker.TotalInput),
+					usage.FormatTokens(qe.conversationUsageTracker.TotalOutput)))
+				if qe.conversationUsageTracker.TotalCacheRead > 0 {
+					msgParts = append(msgParts, fmt.Sprintf("缓存读取 %s", usage.FormatTokens(qe.conversationUsageTracker.TotalCacheRead)))
 				}
-				if qe.usageTracker.TotalCacheCreation > 0 {
-					msgParts = append(msgParts, fmt.Sprintf("缓存写入 %s", usage.FormatTokens(qe.usageTracker.TotalCacheCreation)))
+				if qe.conversationUsageTracker.TotalCacheCreation > 0 {
+					msgParts = append(msgParts, fmt.Sprintf("缓存写入 %s", usage.FormatTokens(qe.conversationUsageTracker.TotalCacheCreation)))
 				}
-				msgParts = append(msgParts, fmt.Sprintf("总计 %s", usage.FormatTokens(qe.usageTracker.TotalTokens())))
+				msgParts = append(msgParts, fmt.Sprintf("总计 %s", usage.FormatTokens(qe.conversationUsageTracker.TotalTokens())))
 			}
-			
+
 			timeMsg := strings.Join(msgParts, "，")
 			if qe.TextCallback != nil {
 				qe.TextCallback(timeMsg, true)
@@ -885,7 +908,23 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 					elapsed := qe.conversationEndTime.Sub(qe.conversationStartTime)
 					minutes := int(elapsed.Minutes())
 					seconds := int(elapsed.Seconds()) % 60
-					stopMsg := fmt.Sprintf("对话已终止。本次对话用时：%d分%d秒", minutes, seconds)
+
+					// Build stop message with token usage
+					var msgParts []string
+					msgParts = append(msgParts, fmt.Sprintf("对话已终止。本次对话用时：%d分%d秒", minutes, seconds))
+					if qe.conversationUsageTracker != nil && qe.conversationUsageTracker.TotalTokens() > 0 {
+						msgParts = append(msgParts, fmt.Sprintf("Token使用：输入 %s，输出 %s",
+							usage.FormatTokens(qe.conversationUsageTracker.TotalInput),
+							usage.FormatTokens(qe.conversationUsageTracker.TotalOutput)))
+						if qe.conversationUsageTracker.TotalCacheRead > 0 {
+							msgParts = append(msgParts, fmt.Sprintf("缓存读取 %s", usage.FormatTokens(qe.conversationUsageTracker.TotalCacheRead)))
+						}
+						if qe.conversationUsageTracker.TotalCacheCreation > 0 {
+							msgParts = append(msgParts, fmt.Sprintf("缓存写入 %s", usage.FormatTokens(qe.conversationUsageTracker.TotalCacheCreation)))
+						}
+						msgParts = append(msgParts, fmt.Sprintf("总计 %s", usage.FormatTokens(qe.conversationUsageTracker.TotalTokens())))
+					}
+					stopMsg := strings.Join(msgParts, "，")
 					if qe.TextCallback != nil {
 						qe.TextCallback(stopMsg, true)
 					}
@@ -1053,6 +1092,10 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 				CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
 			}
 			qe.usageTracker.Add(tokenUsage)
+			// Also track for current conversation
+			if qe.conversationUsageTracker != nil {
+				qe.conversationUsageTracker.Add(tokenUsage)
+			}
 		}
 
 		var assistantContent []api.ContentBlockParam
@@ -1140,7 +1183,23 @@ func (qe *QueryEngine) RunMainLoop(ctx context.Context) error {
 			elapsed := qe.conversationEndTime.Sub(qe.conversationStartTime)
 			minutes := int(elapsed.Minutes())
 			seconds := int(elapsed.Seconds()) % 60
-			timeMsg := fmt.Sprintf("本次对话用时：%d分%d秒", minutes, seconds)
+
+			// Build time and token usage message
+			var msgParts []string
+			msgParts = append(msgParts, fmt.Sprintf("本次对话用时：%d分%d秒", minutes, seconds))
+			if qe.conversationUsageTracker != nil && qe.conversationUsageTracker.TotalTokens() > 0 {
+				msgParts = append(msgParts, fmt.Sprintf("Token使用：输入 %s，输出 %s",
+					usage.FormatTokens(qe.conversationUsageTracker.TotalInput),
+					usage.FormatTokens(qe.conversationUsageTracker.TotalOutput)))
+				if qe.conversationUsageTracker.TotalCacheRead > 0 {
+					msgParts = append(msgParts, fmt.Sprintf("缓存读取 %s", usage.FormatTokens(qe.conversationUsageTracker.TotalCacheRead)))
+				}
+				if qe.conversationUsageTracker.TotalCacheCreation > 0 {
+					msgParts = append(msgParts, fmt.Sprintf("缓存写入 %s", usage.FormatTokens(qe.conversationUsageTracker.TotalCacheCreation)))
+				}
+				msgParts = append(msgParts, fmt.Sprintf("总计 %s", usage.FormatTokens(qe.conversationUsageTracker.TotalTokens())))
+			}
+			timeMsg := strings.Join(msgParts, "，")
 			if qe.TextCallback != nil {
 				qe.TextCallback(timeMsg, true)
 			}

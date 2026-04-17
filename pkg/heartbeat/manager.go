@@ -30,19 +30,19 @@ type simpleTask struct {
 	fn       TaskFunc
 }
 
-func (t *simpleTask) Name() string               { return t.name }
-func (t *simpleTask) Execute(date string) error  { return t.fn(date) }
-func (t *simpleTask) Interval() time.Duration    { return t.interval }
+func (t *simpleTask) Name() string              { return t.name }
+func (t *simpleTask) Execute(date string) error { return t.fn(date) }
+func (t *simpleTask) Interval() time.Duration   { return t.interval }
 
 // Manager 心跳管理器
 type Manager struct {
-	tasks           map[string]Task
-	mu              sync.RWMutex
-	interval        time.Duration
-	lastCheckDate   string
-	running         bool
-	cancel          context.CancelFunc
-	wg              sync.WaitGroup
+	tasks         map[string]Task
+	mu            sync.RWMutex
+	interval      time.Duration
+	lastCheckDate string
+	running       bool
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
 }
 
 // Config 心跳管理器配置
@@ -51,6 +51,8 @@ type Config struct {
 	Interval time.Duration
 	// StartImmediately 是否立即启动
 	StartImmediately bool
+	// LastCheckDate 最后检查日期，如果为空则使用今天
+	LastCheckDate string
 }
 
 // NewManager 创建新的心跳管理器
@@ -60,10 +62,15 @@ func NewManager(cfg *Config) *Manager {
 		interval = cfg.Interval
 	}
 
+	lastCheckDate := time.Now().Format("2006-01-02")
+	if cfg != nil && cfg.LastCheckDate != "" {
+		lastCheckDate = cfg.LastCheckDate
+	}
+
 	m := &Manager{
 		tasks:         make(map[string]Task),
 		interval:      interval,
-		lastCheckDate: time.Now().Format("2006-01-02"),
+		lastCheckDate: lastCheckDate,
 	}
 
 	if cfg != nil && cfg.StartImmediately {

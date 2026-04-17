@@ -128,14 +128,12 @@ func printUsage() {
 	fmt.Println("  agent       CLI interactive mode for direct communication")
 	fmt.Println("  gateway     Starts all configured channels (QQ, Weixin, etc.)")
 	fmt.Println("  onboard     Interactive setup for models and channels")
-	fmt.Println("  weixin-test Test Weixin channel with continuous send (1-30)")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  dogclaw agent")
 	fmt.Println("  dogclaw --config /path/to/config.json gateway")
 	fmt.Println("  dogclaw -c ./myconfig.json onboard")
 	fmt.Println("  dogclaw --compact")
-	fmt.Println("  dogclaw weixin-test")
 }
 
 func main() {
@@ -255,6 +253,8 @@ func main() {
 	if configPath != "" {
 		config.SetConfigPath(configPath)
 		fmt.Printf("📁 Using config file: %s\n", configPath)
+	} else {
+		fmt.Printf("📁 Using config file: %s\n", config.GetConfigPath())
 	}
 
 	// Determine working directory based on multiProjectMode and set it for config lookup
@@ -294,16 +294,11 @@ func main() {
 
 	// Get API key: prioritize from settings, fallback to environment variables
 	apiKey := strings.TrimSpace(cfg.APIKey)
+
 	if apiKey == "" {
-		apiKey = strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
+		fmt.Println("⚠️  Warning: No API key found in settings for model ", cfg.Model)
+		return
 	}
-	if apiKey == "" {
-		apiKey = strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
-	}
-	//if apiKey == "" {
-	fmt.Println("⚠️  Warning: No API key found in settings or environment (ANTHROPIC_API_KEY / OPENROUTER_API_KEY)")
-	//	return
-	//}
 	//cfg.APIKey = apiKey
 
 	// Debug: Print provider and key status
@@ -348,21 +343,7 @@ func runAgent(cfg *config.Config, settings *config.Settings, multiProjectMode bo
 		os.Remove(restartFlagPath)
 	}
 
-	// Initialize heartbeat manager if enabled
-	var hbManager *heartbeat.Manager
-	if settings.EnableHeartbeat {
-		interval := 5 * time.Minute // default 5 minutes
-		if settings.HeartbeatInterval > 0 {
-			interval = time.Duration(settings.HeartbeatInterval) * time.Second
-		}
-		hbManager = heartbeat.NewManager(&heartbeat.Config{
-			Interval:         interval,
-			StartImmediately: true,
-		})
-		logger.Info("[Main] Heartbeat manager initialized")
-	}
-
-	// Initialize experience manager (always, but only register with heartbeat if enabled)
+	// Initialize experience manager first to get last summary date
 	var cwd string
 	if multiProjectMode {
 		cwd, _ = os.Getwd()
@@ -375,13 +356,38 @@ func runAgent(cfg *config.Config, settings *config.Settings, multiProjectMode bo
 	expManager, err := experience.NewManager(&experience.ManagerConfig{
 		WorkingDir: cwd,
 		APIClient:  client,
-		HBManager:  hbManager, // will be nil if heartbeat is disabled
+		HBManager:  nil, // will be set later if heartbeat is enabled
 	})
 	if err != nil {
 		logger.Errorf("[Main] Failed to initialize experience manager: %v", err)
 	} else {
 		logger.Info("[Main] Experience manager initialized")
-		if hbManager != nil {
+	}
+
+	// Initialize heartbeat manager if enabled
+	var hbManager *heartbeat.Manager
+	if settings.EnableHeartbeat {
+		interval := 5 * time.Minute // default 5 minutes
+		if settings.HeartbeatInterval > 0 {
+			interval = time.Duration(settings.HeartbeatInterval) * time.Second
+		}
+
+		// Use last summary date from experience metadata as last check date
+		lastCheckDate := ""
+		if expManager != nil {
+			lastCheckDate = expManager.GetLastSummaryDate()
+		}
+
+		hbManager = heartbeat.NewManager(&heartbeat.Config{
+			Interval:         interval,
+			StartImmediately: true,
+			LastCheckDate:    lastCheckDate,
+		})
+		logger.Info("[Main] Heartbeat manager initialized")
+
+		// Register experience manager with heartbeat
+		if expManager != nil && hbManager != nil {
+			expManager.SetHeartbeatManager(hbManager)
 			logger.Info("[Main] Experience manager registered with heartbeat")
 		}
 	}
@@ -541,21 +547,7 @@ func runGateway(cfg *config.Config, settings *config.Settings, stopChan <-chan o
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Initialize heartbeat manager if enabled
-	var hbManager *heartbeat.Manager
-	if settings.EnableHeartbeat {
-		interval := 5 * time.Minute // default 5 minutes
-		if settings.HeartbeatInterval > 0 {
-			interval = time.Duration(settings.HeartbeatInterval) * time.Second
-		}
-		hbManager = heartbeat.NewManager(&heartbeat.Config{
-			Interval:         interval,
-			StartImmediately: true,
-		})
-		logger.Info("[Main] Heartbeat manager initialized")
-	}
-
-	// Initialize experience manager (always, but only register with heartbeat if enabled)
+	// Initialize experience manager first to get last summary date
 	var cwd string
 	if multiProjectMode {
 		cwd, _ = os.Getwd()
@@ -568,13 +560,38 @@ func runGateway(cfg *config.Config, settings *config.Settings, stopChan <-chan o
 	expManager, err := experience.NewManager(&experience.ManagerConfig{
 		WorkingDir: cwd,
 		APIClient:  client,
-		HBManager:  hbManager, // will be nil if heartbeat is disabled
+		HBManager:  nil, // will be set later if heartbeat is enabled
 	})
 	if err != nil {
 		logger.Errorf("[Main] Failed to initialize experience manager: %v", err)
 	} else {
 		logger.Info("[Main] Experience manager initialized")
-		if hbManager != nil {
+	}
+
+	// Initialize heartbeat manager if enabled
+	var hbManager *heartbeat.Manager
+	if settings.EnableHeartbeat {
+		interval := 5 * time.Minute // default 5 minutes
+		if settings.HeartbeatInterval > 0 {
+			interval = time.Duration(settings.HeartbeatInterval) * time.Second
+		}
+
+		// Use last summary date from experience metadata as last check date
+		lastCheckDate := ""
+		if expManager != nil {
+			lastCheckDate = expManager.GetLastSummaryDate()
+		}
+
+		hbManager = heartbeat.NewManager(&heartbeat.Config{
+			Interval:         interval,
+			StartImmediately: true,
+			LastCheckDate:    lastCheckDate,
+		})
+		logger.Info("[Main] Heartbeat manager initialized")
+
+		// Register experience manager with heartbeat
+		if expManager != nil && hbManager != nil {
+			expManager.SetHeartbeatManager(hbManager)
 			logger.Info("[Main] Experience manager registered with heartbeat")
 		}
 	}

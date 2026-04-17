@@ -64,6 +64,9 @@ type QueryEngine struct {
 	usageTracker *usage.AccumulatedUsage
 	modelName    string
 
+	// Conversation usage tracking (current conversation only)
+	conversationUsageTracker *usage.AccumulatedUsage
+
 	// Thinking config
 	thinkingConfig *thinking.Config
 
