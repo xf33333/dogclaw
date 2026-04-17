@@ -372,16 +372,9 @@ func runAgent(cfg *config.Config, settings *config.Settings, multiProjectMode bo
 			interval = time.Duration(settings.HeartbeatInterval) * time.Second
 		}
 
-		// Use last summary date from experience metadata as last check date
-		lastCheckDate := ""
-		if expManager != nil {
-			lastCheckDate = expManager.GetLastSummaryDate()
-		}
-
 		hbManager = heartbeat.NewManager(&heartbeat.Config{
 			Interval:         interval,
 			StartImmediately: true,
-			LastCheckDate:    lastCheckDate,
 		})
 		logger.Info("[Main] Heartbeat manager initialized")
 
@@ -576,16 +569,9 @@ func runGateway(cfg *config.Config, settings *config.Settings, stopChan <-chan o
 			interval = time.Duration(settings.HeartbeatInterval) * time.Second
 		}
 
-		// Use last summary date from experience metadata as last check date
-		lastCheckDate := ""
-		if expManager != nil {
-			lastCheckDate = expManager.GetLastSummaryDate()
-		}
-
 		hbManager = heartbeat.NewManager(&heartbeat.Config{
 			Interval:         interval,
 			StartImmediately: true,
-			LastCheckDate:    lastCheckDate,
 		})
 		logger.Info("[Main] Heartbeat manager initialized")
 

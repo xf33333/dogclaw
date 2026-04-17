@@ -36,13 +36,12 @@ func (t *simpleTask) Interval() time.Duration   { return t.interval }
 
 // Manager 心跳管理器
 type Manager struct {
-	tasks         map[string]Task
-	mu            sync.RWMutex
-	interval      time.Duration
-	lastCheckDate string
-	running       bool
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
+	tasks    map[string]Task
+	mu       sync.RWMutex
+	interval time.Duration
+	running  bool
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
 }
 
 // Config 心跳管理器配置
@@ -51,8 +50,6 @@ type Config struct {
 	Interval time.Duration
 	// StartImmediately 是否立即启动
 	StartImmediately bool
-	// LastCheckDate 最后检查日期，如果为空则使用今天
-	LastCheckDate string
 }
 
 // NewManager 创建新的心跳管理器
@@ -62,15 +59,9 @@ func NewManager(cfg *Config) *Manager {
 		interval = cfg.Interval
 	}
 
-	lastCheckDate := time.Now().Format("2006-01-02")
-	if cfg != nil && cfg.LastCheckDate != "" {
-		lastCheckDate = cfg.LastCheckDate
-	}
-
 	m := &Manager{
-		tasks:         make(map[string]Task),
-		interval:      interval,
-		lastCheckDate: lastCheckDate,
+		tasks:    make(map[string]Task),
+		interval: interval,
 	}
 
 	if cfg != nil && cfg.StartImmediately {
@@ -217,22 +208,7 @@ func (m *Manager) executeHeartbeat() {
 	now := time.Now()
 	today := now.Format("2006-01-02")
 
-	m.mu.RLock()
-	lastCheckDate := m.lastCheckDate
-	m.mu.RUnlock()
-
-	// 如果日期没有变化，不需要执行
-	if lastCheckDate == today {
-		logger.Debugf("[Heartbeat] No date change, skipping heartbeat")
-		return
-	}
-
-	logger.Infof("[Heartbeat] Date changed from %s to %s, executing tasks", lastCheckDate, today)
-
-	// 更新最后检查日期
-	m.mu.Lock()
-	m.lastCheckDate = today
-	m.mu.Unlock()
+	logger.Infof("[Heartbeat] Date changed   %s, executing tasks", today)
 
 	// 执行所有注册的任务
 	tasks := m.GetAllTasks()
@@ -267,9 +243,8 @@ func (m *Manager) Stats() map[string]interface{} {
 	defer m.mu.RUnlock()
 
 	return map[string]interface{}{
-		"running":         m.running,
-		"interval_ms":     m.interval.Milliseconds(),
-		"last_check_date": m.lastCheckDate,
-		"task_count":      len(m.tasks),
+		"running":     m.running,
+		"interval_ms": m.interval.Milliseconds(),
+		"task_count":  len(m.tasks),
 	}
 }

@@ -11,6 +11,7 @@ import (
 
 	"dogclaw/internal/api"
 	"dogclaw/internal/logger"
+	"dogclaw/pkg/transcript"
 )
 
 // GetExperienceList 获取经验文件列表
@@ -145,8 +146,9 @@ func (m *Manager) GetPendingSummaries() []string {
 
 	var pendingDates []string
 
+	// 如果 lastSummaryDate 为空，扫描有 session 数据的日期
 	if lastSummaryDate == "" {
-		return pendingDates
+		return m.scanSessionDates()
 	}
 
 	lastDate, err := time.Parse(DateFormat, lastSummaryDate)
@@ -163,6 +165,73 @@ func (m *Manager) GetPendingSummaries() []string {
 		}
 	}
 
+	return pendingDates
+}
+
+// scanSessionDates 扫描有 session 数据的日期
+func (m *Manager) scanSessionDates() []string {
+	baseDir := getBaseDir()
+	projectsDir := filepath.Join(baseDir, "projects")
+	sanitized := sanitizePath(m.workingDir)
+	sessionsDir := filepath.Join(projectsDir, sanitized, "session")
+
+	entries, err := os.ReadDir(sessionsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			logger.Infof("[Experience] No sessions directory found: %s", sessionsDir)
+			return nil
+		}
+		logger.Errorf("[Experience] Failed to read sessions directory: %v", err)
+		return nil
+	}
+
+	// 收集所有有 session 数据的日期
+	dateSet := make(map[string]bool)
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		if !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+
+		sessionPath := filepath.Join(sessionsDir, entry.Name())
+		tfile := transcript.NewTranscriptFile(sessionPath)
+		info, err := tfile.Replay()
+		if err != nil {
+			continue
+		}
+
+		// 从 records 中提取日期
+		for _, record := range info.Records {
+			t := time.UnixMilli(record.Timestamp)
+			dateStr := t.Format(DateFormat)
+			dateSet[dateStr] = true
+		}
+	}
+
+	// 转换为排序的日期列表
+	var dates []string
+	for date := range dateSet {
+		dates = append(dates, date)
+	}
+	sort.Strings(dates)
+
+	// 过滤掉已经有 experience 的日期和今天的日期
+	yesterday := time.Now().AddDate(0, 0, -1).Format(DateFormat)
+	var pendingDates []string
+	for _, date := range dates {
+		if date > yesterday {
+			continue
+		}
+		if !m.HasExperience(date) {
+			pendingDates = append(pendingDates, date)
+		}
+	}
+
+	logger.Infof("[Experience] Scanned %d session dates, %d pending", len(dates), len(pendingDates))
 	return pendingDates
 }
 
