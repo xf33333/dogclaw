@@ -5,6 +5,10 @@ package qq
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -28,6 +32,8 @@ const (
 	dedupMaxSize  = 10000
 	// QQ Markdown消息限制（安全阈值）
 	maxMessageLength = 4500
+	// 文件下载目录
+	downloadDir = "~/.dogclaw/download/qq"
 )
 
 // Config holds QQ bot configuration
@@ -166,6 +172,17 @@ func (c *Channel) handleC2CMessage(newEngine channel.EngineFactory) event.C2CMes
 
 		chatID := senderID // C2C: use user ID as chat ID
 		content := strings.TrimSpace(data.Content)
+
+		// Process attachments if any
+		attachmentInfo := c.processAttachments(c.ctx, data.Attachments)
+		if attachmentInfo != "" {
+			if content != "" {
+				content = content + "\n" + attachmentInfo
+			} else {
+				content = attachmentInfo
+			}
+		}
+
 		if content == "" {
 			return nil
 		}
@@ -215,6 +232,17 @@ func (c *Channel) handleGroupATMessage(newEngine channel.EngineFactory) event.Gr
 		// Remove @bot mention prefix from content
 		content := trimBotMention(data.Content)
 		content = strings.TrimSpace(content)
+
+		// Process attachments if any
+		attachmentInfo := c.processAttachments(c.ctx, data.Attachments)
+		if attachmentInfo != "" {
+			if content != "" {
+				content = content + "\n" + attachmentInfo
+			} else {
+				content = attachmentInfo
+			}
+		}
+
 		if content == "" {
 			return nil
 		}
@@ -497,4 +525,88 @@ func (c *Channel) Send(ctx context.Context, chatID, message string) error {
 	}
 	c.sendMessage(ctx, chatID, kind, message)
 	return nil
+}
+
+// downloadFile downloads a file from URL to the download directory
+func downloadFile(ctx context.Context, url, filename string) (string, error) {
+	// Expand home directory
+	dir := os.ExpandEnv(downloadDir)
+	if strings.HasPrefix(dir, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("failed to get home directory: %w", err)
+		}
+		dir = filepath.Join(home, dir[2:])
+	}
+
+	// Create directory if not exists
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create download directory: %w", err)
+	}
+
+	// Create request with context
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Download file
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to download file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download failed with status: %s", resp.Status)
+	}
+
+	// Create destination file
+	destPath := filepath.Join(dir, filename)
+	out, err := os.Create(destPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create file: %w", err)
+	}
+	defer out.Close()
+
+	// Write file content
+	_, err = io.Copy(out, resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return destPath, nil
+}
+
+// processAttachments downloads all attachments and returns a summary message
+func (c *Channel) processAttachments(ctx context.Context, attachments []*dto.MessageAttachment) string {
+	if len(attachments) == 0 {
+		return ""
+	}
+
+	var results []string
+	for _, att := range attachments {
+		if att == nil || att.URL == "" {
+			continue
+		}
+
+		filename := att.FileName
+		if filename == "" {
+			filename = fmt.Sprintf("file_%d", time.Now().Unix())
+		}
+
+		destPath, err := downloadFile(ctx, att.URL, filename)
+		if err != nil {
+			results = append(results, fmt.Sprintf("❌ 下载文件 %s 失败: %v", filename, err))
+			continue
+		}
+
+		sizeInfo := ""
+		if att.Size > 0 {
+			sizeInfo = fmt.Sprintf(" (%d bytes)", att.Size)
+		}
+		results = append(results, fmt.Sprintf("📎 已下载文件: %s%s", destPath, sizeInfo))
+	}
+
+	return strings.Join(results, "\n")
 }
