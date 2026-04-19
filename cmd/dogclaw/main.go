@@ -461,9 +461,9 @@ func runAgent(cfg *config.Config, settings *config.Settings, multiProjectMode bo
 }
 
 // buildTools returns the standard tool list
-func buildTools(registry *channel.Registry) []types.Tool {
+func buildTools(registry *channel.Registry, settings *config.Settings) []types.Tool {
 	toolsList := []types.Tool{
-		tools.NewBashTool(),
+		tools.NewBashTool(settings),
 		tools.NewFileReadTool(),
 		tools.NewFileWriteTool(),
 		tools.NewFileEditTool(),
@@ -487,7 +487,7 @@ func buildTools(registry *channel.Registry) []types.Tool {
 func newEngineFactory(cfg *config.Config, settings *config.Settings, registry *channel.Registry, multiProjectMode bool, expManager *experience.Manager) func(channelName string) *query.QueryEngine {
 	return func(channelName string) *query.QueryEngine {
 		client := api.NewClient(cfg.APIKey, cfg.Model, cfg.BaseURL, cfg.Provider)
-		toolList := buildTools(registry)
+		toolList := buildTools(registry, settings)
 		toolList = append(toolList, experience.NewExperienceTool(expManager))
 		// Determine working directory based on multiProjectMode
 		var cwd string
@@ -690,7 +690,7 @@ func runCompactMode() error {
 
 	// Create a minimal engine just for compaction
 	// We need to create an engine and resume the latest session
-	toolList := buildTools(nil)
+	toolList := buildTools(nil, settings)
 	systemPrompt := query.BuildSystemPrompt(toolList, nil, "")
 	qe := query.NewQueryEngine(client, toolList, systemPrompt, cfg.MaxTurns)
 	qe.SetVerbose(true)

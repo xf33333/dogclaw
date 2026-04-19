@@ -88,6 +88,9 @@ type Settings struct {
 	EnableHeartbeat   bool `json:"enableHeartbeat"`   // 是否启用心跳
 	HeartbeatInterval int  `json:"heartbeatInterval"` // 心跳间隔(秒)，默认300秒(5分钟)
 
+	// Bash tool configuration
+	BashTimeout int `json:"bashTimeout"` // Bash命令执行超时时间(秒)，默认60秒
+
 	// Other parameters
 	MaxTurns             int     `json:"maxTurns"`
 	MaxTokens            int     `json:"maxTokens"`        // 单次响应最大 token 数
@@ -182,6 +185,7 @@ func DefaultSettings() *Settings {
 			WarningRatio:     0.65, // 65% warning
 			MaxContextTokens: 190000,
 		},
+		BashTimeout:          60, // 默认60秒超时
 		MaxTurns:             1000,
 		MaxTokens:            8192,
 		MaxContextLength:     200000, // 默认最大上下文长度 200K tokens

@@ -5,15 +5,25 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
+	"dogclaw/internal/config"
 	"dogclaw/pkg/types"
 )
 
 // BashTool implements the Bash tool for command execution
-type BashTool struct{}
+type BashTool struct {
+	settings *config.Settings
+}
 
-func NewBashTool() *BashTool {
-	return &BashTool{}
+func NewBashTool(settings ...*config.Settings) *BashTool {
+	var s *config.Settings
+	if len(settings) > 0 {
+		s = settings[0]
+	}
+	return &BashTool{
+		settings: s,
+	}
 }
 
 func (t *BashTool) Name() string {
@@ -56,20 +66,41 @@ func (t *BashTool) Call(ctx context.Context, input map[string]any, toolCtx types
 		}, nil
 	}
 
+	// 确定超时时间：优先使用输入参数，否则使用配置文件
+	timeout := 60 * time.Second
+	if t.settings != nil && t.settings.BashTimeout > 0 {
+		timeout = time.Duration(t.settings.BashTimeout) * time.Second
+	}
+	// 检查是否有输入参数覆盖
+	if inputTimeout, ok := input["timeout"].(int); ok && inputTimeout > 0 {
+		timeout = time.Duration(inputTimeout) * time.Millisecond
+	}
+
+	// 创建带超时的 context
+	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	// Execute command via shell
-	cmd := exec.CommandContext(ctx, "bash", "-c", command)
+	cmd := exec.CommandContext(timeoutCtx, "bash", "-c", command)
 	cmd.Dir = toolCtx.Cwd
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		// 检查是否是超时错误
+		if timeoutCtx.Err() == context.DeadlineExceeded {
+			return &types.ToolResult{
+				Data:    fmt.Sprintf("**Bash**\n\ncommand: `%s`\n\nerror: command timed out after %v", command, timeout),
+				IsError: true,
+			}, nil
+		}
 		return &types.ToolResult{
-			Data: fmt.Sprintf("**Bash**\n\ncommand: `%s`\n\noutput:\n%s\n\nerror: %v", command, strings.TrimSpace(string(output)), err),
+			Data:    fmt.Sprintf("**Bash**\n\ncommand: `%s`\n\noutput:\n%s\n\nerror: %v", command, strings.TrimSpace(string(output)), err),
 			IsError: true,
 		}, nil
 	}
 
 	return &types.ToolResult{
-		Data: fmt.Sprintf("**Bash**\n\ncommand: `%s`\n\noutput:\n%s", command, strings.TrimSpace(string(output))),
+		Data:    fmt.Sprintf("**Bash**\n\ncommand: `%s`\n\noutput:\n%s", command, strings.TrimSpace(string(output))),
 		IsError: false,
 	}, nil
 }
