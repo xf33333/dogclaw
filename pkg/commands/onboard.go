@@ -14,6 +14,10 @@ import (
 
 // RunOnboard runs the interactive onboarding process to configure setting.json
 func RunOnboard(ctx context.Context, settings *config.Settings) error {
+	// 初始化技能目录
+	if err := InitializeSkills(); err != nil {
+		fmt.Printf("Warning: failed to initialize skills: %v\n", err)
+	}
 	reader := bufio.NewReader(os.Stdin)
 
 	fmt.Println("🚀 Welcome to DogClaw Onboarding!")
