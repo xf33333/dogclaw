@@ -33,6 +33,55 @@ func formatTruncated(s string, n int) string {
 	return s[:n] + "..."
 }
 
+// buildUserMessageParam constructs an api.MessageParam from a UserMessage
+// If the message contains media, it creates a multimodal content block array
+func (qe *QueryEngine) buildUserMessageParam(msg UserMessage) api.MessageParam {
+	if len(msg.Media) == 0 {
+		return api.MessageParam{
+			Role:    "user",
+			Content: msg.Text,
+		}
+	}
+
+	var blocks []api.ContentBlockParam
+
+	if msg.Text != "" {
+		blocks = append(blocks, api.ContentBlockParam{
+			Type: "text",
+			Text: msg.Text,
+		})
+	}
+
+	for _, media := range msg.Media {
+		switch media.Type {
+		case "image":
+			if media.Data != "" {
+				blocks = append(blocks, api.ContentBlockParam{
+					Type: "image",
+					Source: &api.ImageSource{
+						Type:      "base64",
+						MediaType: media.MediaType,
+						Data:      media.Data,
+					},
+				})
+			} else if media.URL != "" {
+				blocks = append(blocks, api.ContentBlockParam{
+					Type: "image",
+					Source: &api.ImageSource{
+						Type: "url",
+						URL:  media.URL,
+					},
+				})
+			}
+		}
+	}
+
+	return api.MessageParam{
+		Role:    "user",
+		Content: blocks,
+	}
+}
+
 // parsedToolCall represents a tool call extracted from text
 type parsedToolCall struct {
 	ID    string
@@ -295,6 +344,16 @@ func messageContentToString(content any) string {
 
 // SubmitMessage processes a user message and runs the tool call loop
 func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
+	return qe.SubmitUserMessage(ctx, UserMessage{Text: prompt, RawText: prompt})
+}
+
+// SubmitUserMessage processes a user message (with optional media) and runs the tool call loop
+func (qe *QueryEngine) SubmitUserMessage(ctx context.Context, msg UserMessage) error {
+	prompt := msg.Text
+	if prompt == "" && len(msg.Media) == 0 {
+		return nil
+	}
+
 	// Check if already processing
 	if qe.IsProcessing() {
 		// Already processing, enqueue the input
@@ -332,17 +391,18 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) error {
 	qe.tryCompactMemory(ctx)
 
 	// Add to history
-	qe.historyMgr.AddSimpleHistory(prompt)
-
-	// Add user message
-	userMsg := api.MessageParam{
-		Role:    "user",
-		Content: prompt,
+	historyText := msg.RawText
+	if historyText == "" {
+		historyText = prompt
 	}
+	qe.historyMgr.AddSimpleHistory(historyText)
+
+	// Build user message content
+	userMsg := qe.buildUserMessageParam(msg)
 	qe.messages = append(qe.messages, userMsg)
 
 	// Record to transcript
-	qe.RecordMessageToTranscript(transcript.MessageTypeUser, "user", []byte(prompt))
+	qe.RecordMessageToTranscript(transcript.MessageTypeUser, "user", []byte(historyText))
 
 	// Reset turn counter for per-query budget
 	qe.resetForNewQuery()

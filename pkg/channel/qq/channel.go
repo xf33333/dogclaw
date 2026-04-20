@@ -223,17 +223,11 @@ func (c *Channel) handleC2CMessage(newEngine channel.EngineFactory) event.C2CMes
 		chatID := senderID // C2C: use user ID as chat ID
 		content := strings.TrimSpace(data.Content)
 
-		// Process attachments if any
-		attachmentInfo := c.processAttachments(c.ctx, data.Attachments)
-		if attachmentInfo != "" {
-			if content != "" {
-				content = content + "\n" + attachmentInfo
-			} else {
-				content = attachmentInfo
-			}
-		}
+		// Process attachments as media for LLM
+		media := c.processAttachmentsAsMedia(c.ctx, data.Attachments)
 
-		if content == "" {
+		// If no text and no media, skip
+		if content == "" && len(media) == 0 {
 			return nil
 		}
 
@@ -246,9 +240,12 @@ func (c *Channel) handleC2CMessage(newEngine channel.EngineFactory) event.C2CMes
 		session := c.getOrCreateSession(chatID, senderID, newEngine, sendFn)
 
 		go func() {
-			// TextCallback delivers LLM text in real-time; getReply only returns a
-			// non-empty string for error messages, so check before sending.
-			if reply := c.getReply(c.ctx, session, content); reply != "" {
+			userMsg := query.UserMessage{
+				Text:    content,
+				Media:   media,
+				RawText: content,
+			}
+			if reply := c.getReplyWithMedia(c.ctx, session, userMsg); reply != "" {
 				c.sendMessage(c.ctx, chatID, "direct", reply)
 			}
 		}()
@@ -283,17 +280,11 @@ func (c *Channel) handleGroupATMessage(newEngine channel.EngineFactory) event.Gr
 		content := trimBotMention(data.Content)
 		content = strings.TrimSpace(content)
 
-		// Process attachments if any
-		attachmentInfo := c.processAttachments(c.ctx, data.Attachments)
-		if attachmentInfo != "" {
-			if content != "" {
-				content = content + "\n" + attachmentInfo
-			} else {
-				content = attachmentInfo
-			}
-		}
+		// Process attachments as media for LLM
+		media := c.processAttachmentsAsMedia(c.ctx, data.Attachments)
 
-		if content == "" {
+		// If no text and no media, skip
+		if content == "" && len(media) == 0 {
 			return nil
 		}
 
@@ -314,9 +305,12 @@ func (c *Channel) handleGroupATMessage(newEngine channel.EngineFactory) event.Gr
 		}
 
 		go func() {
-			// TextCallback delivers LLM text in real-time; getReply only returns a
-			// non-empty string for error messages, so check before sending.
-			if reply := c.getReply(c.ctx, session, prompt); reply != "" {
+			userMsg := query.UserMessage{
+				Text:    prompt,
+				Media:   media,
+				RawText: content,
+			}
+			if reply := c.getReplyWithMedia(c.ctx, session, userMsg); reply != "" {
 				c.sendMessage(c.ctx, chatID, "group", reply)
 			}
 		}()
@@ -361,16 +355,19 @@ func (c *Channel) getOrCreateSession(chatID, creator string, newEngine channel.E
 // registered in getOrCreateSession, so this function returns "" for successful runs
 // to avoid sending a duplicate message.
 func (c *Channel) getReply(ctx context.Context, session *ChatSession, prompt string) string {
+	return c.getReplyWithMedia(ctx, session, query.UserMessage{Text: prompt})
+}
+
+// getReplyWithMedia runs SubmitUserMessage with media support and returns a non-empty string only on API errors.
+func (c *Channel) getReplyWithMedia(ctx context.Context, session *ChatSession, msg query.UserMessage) string {
 	ctx, cancel := context.WithTimeout(ctx, 24*time.Hour)
 	defer cancel()
 
-	err := session.Engine.SubmitMessage(ctx, prompt)
+	err := session.Engine.SubmitUserMessage(ctx, msg)
 	if err != nil {
 		return fmt.Sprintf("⚠️ 处理错误: %v", err)
 	}
 
-	// TextCallback already pushed every text block (LLM reply + slash output) to QQ;
-	// return "" here to avoid sending a duplicate message.
 	return ""
 }
 
@@ -904,4 +901,138 @@ func (c *Channel) processAttachments(ctx context.Context, attachments []*dto.Mes
 	}
 
 	return strings.Join(results, "\n")
+}
+
+// processAttachmentsAsMedia downloads attachments and returns them as MediaContent for LLM
+// Supports images (converted to base64), videos, and other files
+func (c *Channel) processAttachmentsAsMedia(ctx context.Context, attachments []*dto.MessageAttachment) []query.MediaContent {
+	if len(attachments) == 0 {
+		return nil
+	}
+
+	var mediaList []query.MediaContent
+	for _, att := range attachments {
+		if att == nil || att.URL == "" {
+			continue
+		}
+
+		filename := att.FileName
+		if filename == "" {
+			filename = fmt.Sprintf("file_%d", time.Now().Unix())
+		}
+
+		ext := strings.ToLower(filepath.Ext(filename))
+		mediaType := detectMediaType(ext)
+
+		switch mediaType {
+		case "image":
+			data, err := downloadAsBase64(ctx, att.URL)
+			if err != nil {
+				log.Printf("[QQ] Failed to download image %s: %v", filename, err)
+				continue
+			}
+			mediaList = append(mediaList, query.MediaContent{
+				Type:      "image",
+				MediaType: detectImageMediaType(ext),
+				Data:      data,
+			})
+		case "video":
+			destPath, err := downloadFile(ctx, att.URL, filename)
+			if err != nil {
+				log.Printf("[QQ] Failed to download video %s: %v", filename, err)
+				continue
+			}
+			mediaList = append(mediaList, query.MediaContent{
+				Type:      "video",
+				MediaType: detectVideoMediaType(ext),
+				URL:       destPath,
+			})
+		default:
+			destPath, err := downloadFile(ctx, att.URL, filename)
+			if err != nil {
+				log.Printf("[QQ] Failed to download file %s: %v", filename, err)
+				continue
+			}
+			mediaList = append(mediaList, query.MediaContent{
+				Type:      "file",
+				MediaType: "application/octet-stream",
+				URL:       destPath,
+			})
+		}
+	}
+
+	return mediaList
+}
+
+// downloadAsBase64 downloads a file and returns its base64-encoded content
+func downloadAsBase64(ctx context.Context, url string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download failed with status: %s", resp.Status)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	return base64.StdEncoding.EncodeToString(data), nil
+}
+
+// detectMediaType determines the media type based on file extension
+func detectMediaType(ext string) string {
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp":
+		return "image"
+	case ".mp4", ".mov", ".avi", ".mkv", ".webm":
+		return "video"
+	default:
+		return "file"
+	}
+}
+
+// detectImageMediaType returns the MIME type for image extensions
+func detectImageMediaType(ext string) string {
+	switch ext {
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".bmp":
+		return "image/bmp"
+	default:
+		return "image/jpeg"
+	}
+}
+
+// detectVideoMediaType returns the MIME type for video extensions
+func detectVideoMediaType(ext string) string {
+	switch ext {
+	case ".mp4":
+		return "video/mp4"
+	case ".mov":
+		return "video/quicktime"
+	case ".avi":
+		return "video/x-msvideo"
+	case ".mkv":
+		return "video/x-matroska"
+	case ".webm":
+		return "video/webm"
+	default:
+		return "video/mp4"
+	}
 }

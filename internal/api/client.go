@@ -329,6 +329,16 @@ type ContentBlockParam struct {
 	ToolUseID string `json:"tool_use_id,omitempty"` // For tool_result blocks
 	Content   any    `json:"content,omitempty"`     // For tool_result blocks - MUST be []ContentBlockParam!
 	IsError   bool   `json:"is_error,omitempty"`    // For tool_result blocks
+	Source    any    `json:"source,omitempty"`      // For image blocks - *ImageSource
+}
+
+// ImageSource represents the source of an image for multimodal messages
+// See: https://docs.anthropic.com/en/api/messages#body-messages-content-source
+type ImageSource struct {
+	Type      string `json:"type"`                 // "base64" or "url"
+	MediaType string `json:"media_type,omitempty"` // "image/jpeg", "image/png", "image/gif", "image/webp" (for base64)
+	Data      string `json:"data,omitempty"`       // Base64-encoded image data (for base64 type)
+	URL       string `json:"url,omitempty"`        // Image URL (for url type)
 }
 
 // ToolParam represents a tool definition for the API

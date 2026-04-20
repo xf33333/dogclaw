@@ -36,6 +36,21 @@ import (
 	"dogclaw/pkg/usage"
 )
 
+// MediaContent represents a media item (image, video, etc.) in a user message
+type MediaContent struct {
+	Type      string `json:"type"`                 // "image", "video", etc.
+	MediaType string `json:"media_type,omitempty"` // MIME type: "image/jpeg", "image/png", etc.
+	Data      string `json:"data,omitempty"`       // Base64-encoded data (for base64 source)
+	URL       string `json:"url,omitempty"`        // URL (for URL source)
+}
+
+// UserMessage represents a user message that can contain text and/or media
+type UserMessage struct {
+	Text    string         // Text content
+	Media   []MediaContent // Media content (images, videos, etc.)
+	RawText string         // Original raw text (for history/transcript)
+}
+
 // QueryEngine manages the conversation loop with the LLM
 type QueryEngine struct {
 	client         *api.Client

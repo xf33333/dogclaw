@@ -286,15 +286,43 @@ func (c *WeixinChannel) handleInboundMessage(ctx context.Context, msg WeixinMess
 	}
 
 	var parts []string
+	var mediaList []query.MediaContent
+
 	for _, item := range msg.ItemList {
-		if item.Type == MessageItemTypeText && item.TextItem != nil {
-			parts = append(parts, item.TextItem.Text)
+		switch item.Type {
+		case MessageItemTypeText:
+			if item.TextItem != nil {
+				parts = append(parts, item.TextItem.Text)
+			}
+		case MessageItemTypeImage:
+			if item.ImageItem != nil {
+				media := c.processImageItem(ctx, item.ImageItem)
+				if media != nil {
+					mediaList = append(mediaList, *media)
+				}
+			}
+		case MessageItemTypeVideo:
+			if item.VideoItem != nil {
+				media := c.processVideoItem(ctx, item.VideoItem)
+				if media != nil {
+					mediaList = append(mediaList, *media)
+				}
+			}
+		case MessageItemTypeVoice:
+			if item.VoiceItem != nil && item.VoiceItem.Text != "" {
+				parts = append(parts, fmt.Sprintf("[语音转文字]: %s", item.VoiceItem.Text))
+			}
+		case MessageItemTypeFile:
+			if item.FileItem != nil {
+				parts = append(parts, fmt.Sprintf("[文件]: %s", item.FileItem.FileName))
+			}
 		}
 	}
 
 	content := strings.Join(parts, "\n")
 	content = strings.TrimSpace(content)
-	if content == "" {
+
+	if content == "" && len(mediaList) == 0 {
 		return
 	}
 
@@ -310,7 +338,12 @@ func (c *WeixinChannel) handleInboundMessage(ctx context.Context, msg WeixinMess
 	session := c.getOrCreateSession(ctx, fromUserID, factory)
 
 	go func() {
-		reply := c.getReply(ctx, session, content)
+		userMsg := query.UserMessage{
+			Text:    content,
+			Media:   mediaList,
+			RawText: content,
+		}
+		reply := c.getReplyWithMedia(ctx, session, userMsg)
 		if reply != "" {
 			c.sendMessage(ctx, fromUserID, reply)
 		}
@@ -393,6 +426,87 @@ func (c *WeixinChannel) getReply(ctx context.Context, session *ChatSession, prom
 	// TextCallback already pushed every text block (LLM reply + slash output) to
 	// the channel, so return "" here to avoid sending a duplicate message.
 	return ""
+}
+
+// getReplyWithMedia runs SubmitUserMessage with media support and returns a non-empty string only on API errors.
+func (c *WeixinChannel) getReplyWithMedia(ctx context.Context, session *ChatSession, msg query.UserMessage) string {
+	ctx, cancel := context.WithTimeout(ctx, 24*time.Hour)
+	defer cancel()
+
+	typingCtx, typingCancel := context.WithCancel(ctx)
+	go func() {
+		defer typingCancel()
+		ticket, err := c.getTypingTicket(typingCtx, session.SenderID)
+		if err != nil || ticket == "" {
+			return
+		}
+		_ = c.sendTypingStatus(typingCtx, session.SenderID, ticket, TypingStatusTyping)
+
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-typingCtx.Done():
+				stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				_ = c.sendTypingStatus(stopCtx, session.SenderID, ticket, TypingStatusCancel)
+				stopCancel()
+				return
+			case <-ticker.C:
+				_ = c.sendTypingStatus(typingCtx, session.SenderID, ticket, TypingStatusTyping)
+			}
+		}
+	}()
+
+	err := session.Engine.SubmitUserMessage(ctx, msg)
+	typingCancel()
+
+	if err != nil {
+		return fmt.Sprintf("⚠️ 处理错误: %v", err)
+	}
+
+	return ""
+}
+
+// processImageItem converts an ImageItem to MediaContent for LLM
+func (c *WeixinChannel) processImageItem(ctx context.Context, item *ImageItem) *query.MediaContent {
+	if item == nil {
+		return nil
+	}
+
+	if item.Url != "" {
+		return &query.MediaContent{
+			Type:      "image",
+			MediaType: "image/jpeg",
+			URL:       item.Url,
+		}
+	}
+
+	if item.Media != nil && item.Media.FullURL != "" {
+		return &query.MediaContent{
+			Type:      "image",
+			MediaType: "image/jpeg",
+			URL:       item.Media.FullURL,
+		}
+	}
+
+	return nil
+}
+
+// processVideoItem converts a VideoItem to MediaContent for LLM
+func (c *WeixinChannel) processVideoItem(ctx context.Context, item *VideoItem) *query.MediaContent {
+	if item == nil {
+		return nil
+	}
+
+	if item.Media != nil && item.Media.FullURL != "" {
+		return &query.MediaContent{
+			Type:      "video",
+			MediaType: "video/mp4",
+			URL:       item.Media.FullURL,
+		}
+	}
+
+	return nil
 }
 
 const (
