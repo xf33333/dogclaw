@@ -83,6 +83,22 @@ func (c *WeixinChannel) Info() channel.Info {
 	return channel.Info{Name: "weixin"}
 }
 
+// SystemPrompt implements channel.Interface
+func (c *WeixinChannel) SystemPrompt() string {
+	return `## 微信频道能力说明
+
+### 文件接收
+- 用户发送的文件会自动下载
+- 支持接收图片、语音、视频、文件等附件
+
+### 消息发送
+- 支持发送文本消息
+- 支持发送图片、文件等媒体类型
+
+### 注意事项
+- 微信频道通过企业微信接口实现`
+}
+
 // Start implements channel.Interface
 func (c *WeixinChannel) Start(ctx context.Context, factory channel.EngineFactory) error {
 	logger.Info("[weixin] Starting Weixin channel")

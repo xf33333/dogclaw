@@ -3,9 +3,13 @@
 package qq
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,6 +20,7 @@ import (
 	"time"
 
 	"github.com/tencent-connect/botgo"
+	"github.com/tencent-connect/botgo/constant"
 	"github.com/tencent-connect/botgo/dto"
 	"github.com/tencent-connect/botgo/event"
 	"github.com/tencent-connect/botgo/openapi"
@@ -73,8 +78,10 @@ type ChatSession struct {
 	Creator string // first user who created this session
 }
 
-// Assert Channel implements channel.Interface
+// Assert Channel implements channel.Interface and channel.FileSender
 var _ channel.Interface = (*Channel)(nil)
+var _ channel.FileSender = (*Channel)(nil)
+var _ channel.ActiveChatter = (*Channel)(nil)
 
 // NewChannel creates a new QQ channel
 func NewChannel(cfg Config) *Channel {
@@ -88,6 +95,37 @@ func NewChannel(cfg Config) *Channel {
 // Info implements channel.Interface
 func (c *Channel) Info() channel.Info {
 	return channel.Info{Name: "qq"}
+}
+
+// SystemPrompt implements channel.Interface
+func (c *Channel) SystemPrompt() string {
+	return `## QQ频道能力说明
+
+### 文件接收
+- 用户发送的文件会自动下载到 ~/.dogclaw/download/qq 目录
+- 支持接收图片、语音、视频、文件等附件
+- 下载完成后会将文件路径信息包含在消息中
+
+### 文件发送
+- 可以使用 channel_send_file 工具向用户发送文件
+- 文件类型: 1=图片, 2=视频, 3=语音(仅支持silk格式), 4=文件
+- 支持两种方式:
+  1. 远程URL: file_url为HTTP/HTTPS链接
+  2. 本地文件: file_url为本地文件路径，会通过base64编码上传
+- 重要限制: 群聊不支持发送文件类型(4)，仅支持图片、视频、语音
+- 示例:
+  - 远程图片: channel_send_file(channel="qq", file_type=1, file_url="https://example.com/image.png")
+  - 本地文件: channel_send_file(channel="qq", file_type=4, file_url="/path/to/file.pdf", file_name="document.pdf")
+
+### 消息发送
+- 支持发送文本消息和Markdown格式消息
+- 私聊消息直接发送给用户
+- 群消息需要@机器人才能触发回复
+
+### 注意事项
+- 群消息中的URL会被处理以避免QQ的URL黑名单机制
+- 消息长度有限制，超长消息会被截断
+- 本地文件上传使用base64编码，大文件可能需要较长时间`
 }
 
 // Start initializes and runs the QQ bot in WebSocket mode
@@ -149,6 +187,18 @@ func (c *Channel) Stop() {
 		}
 		close(c.done)
 	})
+}
+
+// ActiveChatIDs implements channel.ActiveChatter
+func (c *Channel) ActiveChatIDs() []string {
+	var ids []string
+	c.sessions.Range(func(key, _ any) bool {
+		if id, ok := key.(string); ok {
+			ids = append(ids, id)
+		}
+		return true
+	})
+	return ids
 }
 
 // handleC2CMessage handles QQ private (C2C) messages
@@ -525,6 +575,251 @@ func (c *Channel) Send(ctx context.Context, chatID, message string) error {
 	}
 	c.sendMessage(ctx, chatID, kind, message)
 	return nil
+}
+
+// SendFile implements channel.FileSender
+// Supports both remote URLs and local file paths.
+// Uses two-step flow: upload first to get file_info, then send message.
+func (c *Channel) SendFile(ctx context.Context, chatID string, fileType int, fileURL, fileName string) error {
+	log.Printf("[QQ] SendFile called: chatID=%s, fileType=%d, fileURL=%s, fileName=%s", chatID, fileType, fileURL, fileName)
+
+	if fileURL == "" {
+		return fmt.Errorf("file URL or path is required")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	chatKind := "direct"
+	targetID := chatID
+	if strings.HasPrefix(chatID, "group:") {
+		chatKind = "group"
+		targetID = strings.TrimPrefix(chatID, "group:")
+	}
+
+	log.Printf("[QQ] SendFile: chatKind=%s, targetID=%s", chatKind, targetID)
+
+	// Group chat does not support file_type=4 (file)
+	if chatKind == "group" && fileType == channel.FileTypeFile {
+		return fmt.Errorf("QQ群聊暂不支持发送文件类型(仅支持图片、视频、语音)")
+	}
+
+	// Upload file first
+	fileInfo, err := c.uploadFile(ctx, chatKind, targetID, fileType, fileURL, fileName)
+	if err != nil {
+		log.Printf("[QQ] SendFile upload failed: %v", err)
+		return fmt.Errorf("failed to upload file: %w", err)
+	}
+
+	log.Printf("[QQ] SendFile upload success, fileInfo length=%d", len(fileInfo))
+
+	// Send message with file_info
+	err = c.sendFileMessage(ctx, chatKind, targetID, fileInfo)
+	if err != nil {
+		log.Printf("[QQ] SendFile send message failed: %v", err)
+		return err
+	}
+
+	log.Printf("[QQ] SendFile completed successfully")
+	return nil
+}
+
+// isHTTPURL checks if the string is an HTTP/HTTPS URL
+func isHTTPURL(s string) bool {
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
+
+// qqMediaUpload is the payload for uploading media to QQ
+type qqMediaUpload struct {
+	FileType   uint64 `json:"file_type"`
+	URL        string `json:"url,omitempty"`
+	FileData   string `json:"file_data,omitempty"`
+	FileName   string `json:"file_name,omitempty"`
+	SrvSendMsg bool   `json:"srv_send_msg"`
+}
+
+// qqMediaUploadResponse is the response from uploading media
+type qqMediaUploadResponse struct {
+	FileUUID string `json:"file_uuid"`
+	FileInfo string `json:"file_info"`
+	TTL      int    `json:"ttl"`
+	ID       string `json:"id,omitempty"`
+}
+
+// uploadFile uploads a file and returns file_info
+func (c *Channel) uploadFile(ctx context.Context, chatKind, targetID string, fileType int, fileSource, fileName string) ([]byte, error) {
+	payload := &qqMediaUpload{
+		FileType:   uint64(fileType),
+		SrvSendMsg: false,
+	}
+
+	if isHTTPURL(fileSource) {
+		payload.URL = fileSource
+	} else {
+		data, err := os.ReadFile(fileSource)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read local file: %w", err)
+		}
+		payload.FileData = base64.StdEncoding.EncodeToString(data)
+		log.Printf("[QQ] uploadFile: read local file %s, size=%d bytes", fileSource, len(data))
+	}
+
+	if fileName != "" && fileType == channel.FileTypeFile {
+		payload.FileName = fileName
+	}
+
+	uploadURL := c.mediaUploadURL(chatKind, targetID)
+
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal payload: %w", err)
+	}
+	log.Printf("[QQ] uploadFile: URL=%s, payload=%s", uploadURL, string(payloadJSON))
+
+	// Get access token
+	tk, err := c.ts.Token()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get access token: %w", err)
+	}
+
+	// Build HTTP request manually
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, uploadURL, bytes.NewReader(payloadJSON))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", tk.TokenType+" "+tk.AccessToken)
+	req.Header.Set("X-Union-Appid", c.cfg.AppID)
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	log.Printf("[QQ] uploadFile: status=%d, response=%s", resp.StatusCode, string(body))
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("upload failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var uploaded qqMediaUploadResponse
+	if err := json.Unmarshal(body, &uploaded); err != nil {
+		return nil, fmt.Errorf("failed to parse upload response: %w (body: %s)", err, string(body))
+	}
+	if uploaded.FileInfo == "" {
+		return nil, fmt.Errorf("upload response missing file_info (body: %s)", string(body))
+	}
+
+	log.Printf("[QQ] uploadFile: got file_info, ttl=%d", uploaded.TTL)
+	return []byte(uploaded.FileInfo), nil
+}
+
+type qqFileMessageRequest struct {
+	MsgType int    `json:"msg_type"`
+	MsgID   string `json:"msg_id,omitempty"`
+	MsgSeq  uint32 `json:"msg_seq,omitempty"`
+	Media   struct {
+		FileInfo string `json:"file_info"`
+	} `json:"media"`
+}
+
+func (c *Channel) sendFileMessage(ctx context.Context, chatKind, targetID string, fileInfo []byte) error {
+	req := &qqFileMessageRequest{
+		MsgType: 7,
+	}
+	req.Media.FileInfo = string(fileInfo)
+
+	c.applyPassiveReplyMetadataToFile(targetID, req)
+
+	var apiURL string
+	if chatKind == "group" {
+		apiURL = fmt.Sprintf("https://api.sgroup.qq.com/v2/groups/%s/messages", targetID)
+	} else {
+		apiURL = fmt.Sprintf("https://api.sgroup.qq.com/v2/users/%s/messages", targetID)
+	}
+
+	reqBody, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+
+	tk, err := c.ts.Token()
+	if err != nil {
+		return fmt.Errorf("failed to get access token: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(reqBody))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", tk.TokenType+" "+tk.AccessToken)
+	httpReq.Header.Set("X-Union-Appid", c.cfg.AppID)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	log.Printf("[QQ] sendFileMessage: status=%d, response=%s", resp.StatusCode, string(body))
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("send message failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+func (c *Channel) applyPassiveReplyMetadataToFile(chatID string, req *qqFileMessageRequest) {
+	if v, ok := c.lastMsgID.Load(chatID); ok {
+		if id, ok := v.(string); ok && id != "" {
+			req.MsgID = id
+			if cv, ok := c.msgSeqCounters.Load(chatID); ok {
+				if ctr, ok := cv.(*atomic.Uint64); ok {
+					req.MsgSeq = uint32(ctr.Add(1))
+				}
+			}
+		}
+	}
+}
+
+// applyPassiveReplyMetadata sets MsgID and MsgSeq for passive reply
+func (c *Channel) applyPassiveReplyMetadata(chatID string, msg *dto.MessageToCreate) {
+	if v, ok := c.lastMsgID.Load(chatID); ok {
+		if msgID, ok := v.(string); ok && msgID != "" {
+			msg.MsgID = msgID
+
+			// Increment msg_seq atomically for multi-part replies
+			if counterVal, ok := c.msgSeqCounters.Load(chatID); ok {
+				if counter, ok := counterVal.(*atomic.Uint64); ok {
+					seq := counter.Add(1)
+					msg.MsgSeq = uint32(seq)
+				}
+			}
+		}
+	}
+}
+
+// mediaUploadURL returns the media upload URL for group or C2C
+func (c *Channel) mediaUploadURL(chatKind, targetID string) string {
+	if chatKind == "group" {
+		return fmt.Sprintf("%s/v2/groups/%s/files", constant.APIDomain, targetID)
+	}
+	return fmt.Sprintf("%s/v2/users/%s/files", constant.APIDomain, targetID)
 }
 
 // downloadFile downloads a file from URL to the download directory

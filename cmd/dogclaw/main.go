@@ -478,6 +478,7 @@ func buildTools(registry *channel.Registry, settings *config.Settings) []types.T
 
 	if registry != nil {
 		toolsList = append(toolsList, tools.NewNotifyChannelTool(registry))
+		toolsList = append(toolsList, tools.NewChannelSendFileTool(registry))
 	}
 
 	return toolsList

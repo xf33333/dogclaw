@@ -28,6 +28,10 @@ type Interface interface {
 
 	// Stop shuts down the channel gracefully
 	Stop()
+
+	// SystemPrompt returns channel-specific system prompt for LLM
+	// This tells the LLM how to use this channel's capabilities
+	SystemPrompt() string
 }
 
 // Sender is the capability to proactively push text messages.
@@ -36,6 +40,30 @@ type Sender interface {
 	// chatID is channel-specific (e.g. user_id, "group:xxx").
 	// If chatID is empty, sends to all known active sessions.
 	Send(ctx context.Context, chatID, message string) error
+}
+
+// FileSender is the capability to send files to users.
+type FileSender interface {
+	Sender
+	// SendFile sends a file to a specific chat target.
+	// chatID is channel-specific (e.g. user_id, "group:xxx").
+	// fileType: 1=image, 2=video, 3=voice, 4=file
+	// fileURL is the HTTP/HTTPS URL of the file to send.
+	SendFile(ctx context.Context, chatID string, fileType int, fileURL, fileName string) error
+}
+
+// FileType constants for SendFile
+const (
+	FileTypeImage = 1
+	FileTypeVideo = 2
+	FileTypeVoice = 3
+	FileTypeFile  = 4
+)
+
+// ActiveChatter is the capability to report active chat IDs.
+type ActiveChatter interface {
+	// ActiveChatIDs returns the list of currently active chat IDs.
+	ActiveChatIDs() []string
 }
 
 // Registry keeps a record of all running channels that support proactive sending.
@@ -67,6 +95,22 @@ func (r *Registry) Send(ctx context.Context, channelName, chatID, message string
 	return s.Send(ctx, chatID, message)
 }
 
+func (r *Registry) SendFile(ctx context.Context, channelName, chatID string, fileType int, fileURL, fileName string) error {
+	r.mu.RLock()
+	s, ok := r.channels[channelName]
+	r.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("channel %s not found in registry (available: %v)", channelName, r.GetChannels())
+	}
+
+	fs, ok := s.(FileSender)
+	if !ok {
+		return fmt.Errorf("channel %s does not support file sending", channelName)
+	}
+	return fs.SendFile(ctx, chatID, fileType, fileURL, fileName)
+}
+
 func (r *Registry) GetChannels() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -75,4 +119,30 @@ func (r *Registry) GetChannels() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+func (r *Registry) GetFileSender(channelName string) (FileSender, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	s, ok := r.channels[channelName]
+	if !ok {
+		return nil, false
+	}
+	fs, ok := s.(FileSender)
+	return fs, ok
+}
+
+func (r *Registry) ActiveChatIDs(channelName string) []string {
+	r.mu.RLock()
+	s, ok := r.channels[channelName]
+	r.mu.RUnlock()
+
+	if !ok {
+		return nil
+	}
+	ac, ok := s.(ActiveChatter)
+	if !ok {
+		return nil
+	}
+	return ac.ActiveChatIDs()
 }

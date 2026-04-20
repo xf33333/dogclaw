@@ -74,6 +74,18 @@ func (c *Channel) Info() channel.Info {
 	return channel.Info{Name: "gateway"}
 }
 
+func (c *Channel) SystemPrompt() string {
+	return `## Gateway频道能力说明
+
+### 概述
+- Gateway是一个WebSocket网关服务
+- 提供HTTP接口供外部应用接入
+
+### 消息发送
+- 支持发送文本消息
+- 通过WebSocket连接推送消息`
+}
+
 func (c *Channel) Start(ctx context.Context, factory channel.EngineFactory) error {
 	c.factory = factory
 
