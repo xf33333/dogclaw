@@ -15,6 +15,7 @@ import (
 	"dogclaw/pkg/compact"
 	"dogclaw/pkg/experience"
 	"dogclaw/pkg/heartbeat"
+	"dogclaw/pkg/mdrender"
 	"dogclaw/pkg/query"
 	"dogclaw/pkg/skills"
 	"dogclaw/pkg/slash"
@@ -389,6 +390,9 @@ func runAgent(cfg *config.Config, settings *config.Settings, multiProjectMode bo
 	fmt.Println("Type your message or /help for commands. Ctrl+C to exit.")
 	fmt.Println()
 
+	// Enable Markdown rendering for CLI output
+	mdrender.EnableForceRender()
+
 	// Initialize terminal manager with readline (supports Up/Down history, Ctrl+R search)
 	tm, err := terminal.New(nil)
 	if err != nil {
@@ -405,9 +409,11 @@ func runAgent(cfg *config.Config, settings *config.Settings, multiProjectMode bo
 	qe := engineFactory("cli")
 
 	// TextCallback: fires for every LLM text block (intermediate turns with tools
-	// and the final text-only reply). Print immediately for real-time feedback.
+	// and the final text-only reply). Render as Markdown and print immediately
+	// for real-time feedback.
 	qe.TextCallback = func(text string, isFinish bool) {
-		tm.Println(text)
+		rendered := mdrender.Render(text)
+		tm.Write([]byte(rendered))
 	}
 
 	// ToolCallCallback: prints a brief notification when a tool is called
