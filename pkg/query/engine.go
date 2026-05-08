@@ -107,6 +107,11 @@ type QueryEngine struct {
 	// isFinish is true when this is the final text block of the conversation.
 	TextCallback func(text string, isFinish bool)
 
+	// ResumeCallback is called after a session is successfully resumed, with the
+	// formatted conversation history for display. Channels (e.g., CLI) can use this
+	// to output the restored conversation to the user.
+	ResumeCallback func(formattedHistory string)
+
 	// LastTurnToolCalls records the last turn's tool use blocks (for channels to consume after SubmitMessage)
 	LastTurnToolCalls []ToolCallInfo
 
@@ -822,6 +827,10 @@ func (qe *QueryEngine) handleResumeCommand(ctx context.Context, args string) (st
 	}
 
 	msg := fmt.Sprintf("✅ Resumed session: %s\n   Messages: %d, Turns: %d", qe.sessionID, len(qe.messages), qe.currentTurn)
+
+	// Notify channels (e.g., CLI) to output the resumed conversation history
+	qe.notifyResumed()
+
 	return msg, nil
 }
 
@@ -1010,6 +1019,10 @@ func (qe *QueryEngine) AutoResumeLatestSession(ctx context.Context) error {
 	msg := fmt.Sprintf("♻️  Auto-resumed latest session: %s\n   Messages: %d, Turns: %d", qe.sessionID, len(qe.messages), qe.currentTurn)
 	qe.lastAssistantText = msg
 	qe.logger.Info(msg)
+
+	// Notify channels (e.g., CLI) to output the resumed conversation history
+	qe.notifyResumed()
+
 	return nil
 }
 
@@ -2183,4 +2196,73 @@ func BuildSystemPrompt(tools []types.Tool, loadedSkills []*skills.Skill, customP
 	}
 
 	return sb.String()
+}
+
+// FormatResumedMessages formats the current messages into a readable conversation
+// history string suitable for display when a session is resumed.
+// It shows user and assistant messages with role indicators, skipping tool_result
+// messages for cleaner output.
+func (qe *QueryEngine) FormatResumedMessages() string {
+	if len(qe.messages) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	for _, msg := range qe.messages {
+		// Extract text content from the message
+		var text string
+		switch v := msg.Content.(type) {
+		case string:
+			text = v
+		case []api.ContentBlockParam:
+			// Extract text blocks and tool_use summaries
+			var parts []string
+			for _, block := range v {
+				if block.Type == "text" && block.Text != "" {
+					parts = append(parts, block.Text)
+				} else if block.Type == "tool_use" {
+					// Show tool call as a brief summary
+					inputJSON, _ := json.Marshal(block.Input)
+					inputStr := string(inputJSON)
+					if len(inputStr) > 100 {
+						inputStr = inputStr[:97] + "..."
+					}
+					parts = append(parts, fmt.Sprintf("🔧 %s(%s)", block.Name, inputStr))
+				}
+				// Skip tool_result blocks for cleaner output
+			}
+			text = strings.Join(parts, "\n")
+		}
+
+		if text == "" {
+			continue
+		}
+
+		// Add role indicator
+		switch msg.Role {
+		case "user":
+			sb.WriteString("👤 ")
+		case "assistant":
+			sb.WriteString("🤖 ")
+		}
+
+		sb.WriteString(text)
+		sb.WriteString("\n\n")
+	}
+
+	return sb.String()
+}
+
+// notifyResumed calls the ResumeCallback with the formatted conversation history
+// if one is registered. This allows channels (e.g., CLI) to output the restored
+// conversation when a session is resumed.
+func (qe *QueryEngine) notifyResumed() {
+	if qe.ResumeCallback == nil {
+		return
+	}
+
+	formatted := qe.FormatResumedMessages()
+	if formatted != "" {
+		qe.ResumeCallback(formatted)
+	}
 }

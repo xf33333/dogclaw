@@ -421,6 +421,12 @@ func runAgent(cfg *config.Config, settings *config.Settings, multiProjectMode bo
 		tm.Printf("🔧 %s\n", summary)
 	}
 
+	// ResumeCallback: output resumed conversation history with Markdown rendering
+	qe.ResumeCallback = func(formattedHistory string) {
+		rendered := mdrender.Render(formattedHistory)
+		tm.Write([]byte(rendered))
+	}
+
 	// Try to resume the most recent session automatically
 	qe.AutoResumeLatestSession(context.Background())
 
