@@ -59,3 +59,6 @@ require (
 	golang.org/x/text v0.30.0 // indirect
 	rsc.io/qr v0.2.0 // indirect
 )
+
+// Fix CJK double-width character cursor positioning bug in chzyer/readline
+replace github.com/chzyer/readline v1.5.1 => ./third_party/readline
