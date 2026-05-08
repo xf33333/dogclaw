@@ -260,6 +260,10 @@ func (o *Operation) ioloop() {
 			} else {
 				isUpdateHistory = false
 			}
+		case MetaPasteNewline:
+			// Newline from bracketed paste: insert as a regular character
+			// instead of submitting the line
+			o.buf.WriteRune('\n')
 		case CharBackward:
 			o.buf.MoveBackward()
 		case CharForward:
@@ -380,7 +384,15 @@ func (o *Operation) String() (string, error) {
 
 func (o *Operation) Runes() ([]rune, error) {
 	o.t.EnterRawMode()
-	defer o.t.ExitRawMode()
+	// Enable bracketed paste mode so we can distinguish pasted text
+	// from typed characters (especially newlines)
+	o.w.Write([]byte("\x1b[?2004h"))
+
+	defer func() {
+		// Disable bracketed paste mode before exiting raw mode
+		o.w.Write([]byte("\x1b[?2004l"))
+		o.t.ExitRawMode()
+	}()
 
 	listener := o.GetConfig().Listener
 	if listener != nil {

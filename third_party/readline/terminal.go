@@ -127,6 +127,7 @@ func (t *Terminal) ioloop() {
 		isEscapeEx     bool
 		isEscapeSS3    bool
 		expectNextChar bool
+		isPaste        bool // bracketed paste mode active
 	)
 
 	buf := bufio.NewReader(t.getStdin())
@@ -167,6 +168,21 @@ func (t *Terminal) ioloop() {
 		} else if isEscapeEx {
 			isEscapeEx = false
 			if key := readEscKey(r, buf); key != nil {
+				// Detect bracketed paste start: \033[200~
+				// and bracketed paste end: \033[201~
+				if key.typ == '~' {
+					switch key.attr {
+					case "200":
+						isPaste = true
+						expectNextChar = true
+						continue
+					case "201":
+						isPaste = false
+						expectNextChar = true
+						continue
+					}
+				}
+
 				r = escapeExKey(key)
 				// offset
 				if key.typ == 'R' {
@@ -203,7 +219,16 @@ func (t *Terminal) ioloop() {
 				break
 			}
 			isEscape = true
-		case CharInterrupt, CharEnter, CharCtrlJ, CharDelete:
+		case CharCtrlJ:
+			if isPaste {
+				// During bracketed paste, treat newline as a regular character
+				// rather than as a submit/enter key
+				t.outchan <- MetaPasteNewline
+			} else {
+				expectNextChar = false
+				t.outchan <- r
+			}
+		case CharInterrupt, CharEnter, CharDelete:
 			expectNextChar = false
 			fallthrough
 		default:

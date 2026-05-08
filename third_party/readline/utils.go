@@ -54,6 +54,7 @@ const (
 	MetaDelete
 	MetaBackspace
 	MetaTranspose
+	MetaPasteNewline // newline character from bracketed paste (should be inserted, not submitted)
 )
 
 // WaitForResume need to call before current process got suspend.
@@ -217,6 +218,14 @@ func SplitByLine(start, screenWidth int, rs []rune) []string {
 	buf := bytes.NewBuffer(nil)
 	currentWidth := start
 	for _, r := range rs {
+		if r == '\n' {
+			// newline character forces a line break
+			buf.WriteRune(r)
+			ret = append(ret, buf.String())
+			buf.Reset()
+			currentWidth = 0
+			continue
+		}
 		w := runes.Width(r)
 		currentWidth += w
 		buf.WriteRune(r)

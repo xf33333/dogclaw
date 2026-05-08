@@ -384,8 +384,26 @@ func (r *RuneBuffer) LineCount(width int) int {
 	if width == -1 {
 		width = r.width
 	}
-	return LineCount(width,
-		runes.WidthAll(r.buf)+r.PromptLen())
+	if width == 0 {
+		return 1
+	}
+	// Count lines properly, accounting for \n characters
+	promptLen := r.PromptLen()
+	lines := 1
+	currentWidth := promptLen
+	for _, ch := range r.buf {
+		if ch == '\n' {
+			lines++
+			currentWidth = 0
+			continue
+		}
+		currentWidth += runes.Width(ch)
+		if currentWidth >= width {
+			lines++
+			currentWidth = 0
+		}
+	}
+	return lines
 }
 
 func (r *RuneBuffer) MoveTo(ch rune, prevChar, reverse bool) (success bool) {
@@ -439,8 +457,24 @@ func (r *RuneBuffer) idxLine(width int) int {
 	if width == 0 {
 		return 0
 	}
-	sp := r.getSplitByLine(r.buf[:r.idx])
-	return len(sp) - 1
+	// Count lines up to the cursor position, accounting for \n
+	promptLen := r.promptLen()
+	lines := 0
+	currentWidth := promptLen
+	for i := 0; i < r.idx && i < len(r.buf); i++ {
+		ch := r.buf[i]
+		if ch == '\n' {
+			lines++
+			currentWidth = 0
+			continue
+		}
+		currentWidth += runes.Width(ch)
+		if currentWidth >= width {
+			lines++
+			currentWidth = 0
+		}
+	}
+	return lines
 }
 
 func (r *RuneBuffer) CursorLineCount() int {
@@ -510,45 +544,63 @@ func (r *RuneBuffer) output() []byte {
 }
 
 func (r *RuneBuffer) getBackspaceSequence() []byte {
-	// sep maps display-width positions where line wrapping occurs.
-	// We precompute the cumulative display width for each rune index
-	// so that we can correctly handle double-width characters (e.g. CJK).
-	cumWidth := make([]int, len(r.buf)+1)
+	// Generate terminal escape sequences to move the cursor from the end
+	// of the buffer back to r.idx position. Must handle:
+	// 1. Double-width chars (CJK) needing 2 backspaces
+	// 2. Newline chars (\n) causing cursor to jump to next line
+	// 3. Line wrapping when content exceeds terminal width
+
+	if r.width == 0 {
+		return nil
+	}
+
+	promptLen := r.promptLen()
+
+	// Precompute: for each rune index i, store the display width of the line
+	// that rune i is on (from the start of that line up to and including rune i).
+	// For \n, we store the width of the line BEFORE the \n.
+	// This allows us to correctly move the cursor back when crossing a \n.
+	prevLineWidth := make([]int, len(r.buf)+1)
+	currentLineWidth := promptLen
 	for i, ch := range r.buf {
-		cumWidth[i+1] = cumWidth[i] + runes.Width(ch)
+		if ch == '\n' {
+			// The line ending at this \n has width currentLineWidth
+			prevLineWidth[i] = currentLineWidth
+			currentLineWidth = 0
+		} else {
+			currentLineWidth += runes.Width(ch)
+			if currentLineWidth >= r.width {
+				// line wrap: this line has full width
+				currentLineWidth = 0
+			}
+			prevLineWidth[i] = -1 // marker: not a \n boundary
+		}
 	}
 
-	var sep = map[int]bool{}
-
-	var i int
-	for {
-		if i >= cumWidth[len(r.buf)] {
-			break
-		}
-
-		if i == 0 {
-			i -= r.promptLen()
-		}
-		i += r.width
-
-		sep[i] = true
-	}
 	var buf []byte
 	for i := len(r.buf); i > r.idx; i-- {
-		// move cursor back by the display width of this rune
-		w := runes.Width(r.buf[i-1])
-		for j := 0; j < w; j++ {
-			buf = append(buf, '\b')
-		}
-		// check if we crossed a line boundary
-		if sep[cumWidth[i]] {
-			// up one line, go to the start of the line and move cursor right to the end (r.width)
-			buf = append(buf, "\033[A\r"+"\033["+strconv.Itoa(r.width)+"C"...)
+		ch := r.buf[i-1]
+		if ch == '\n' {
+			// Moving back over a \n: cursor is at start of a line,
+			// need to go up one line and move to the end of the previous line.
+			// The width of the line that ended with this \n is stored at prevLineWidth[i-1].
+			w := prevLineWidth[i-1]
+			buf = append(buf, "\033[A"...) // move up one line
+			if w > 0 {
+				buf = append(buf, "\r"...)
+				buf = append(buf, "\033["+strconv.Itoa(w)+"C"...)
+			} else {
+				buf = append(buf, "\r"...)
+			}
+		} else {
+			w := runes.Width(ch)
+			for j := 0; j < w; j++ {
+				buf = append(buf, '\b')
+			}
 		}
 	}
 
 	return buf
-
 }
 
 func (r *RuneBuffer) Reset() []rune {
