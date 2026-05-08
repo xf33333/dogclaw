@@ -236,6 +236,15 @@ func RegisterBuiltinCommands(registry *CommandRegistry) {
 	})
 
 	registry.Register(&Command{
+		Name:        "upgrade",
+		Aliases:     []string{"update"},
+		Description: "Upgrade to the latest version from GitHub Releases",
+		Type:        LocalCommand,
+		Source:      "builtin",
+		Handler:     HandleUpgrade,
+	})
+
+	registry.Register(&Command{
 		Name:        "restart",
 		Aliases:     []string{"reboot"},
 		Description: "Restart the program",
@@ -322,6 +331,7 @@ func HandleHelp(ctx context.Context, args string) (*CommandResult, error) {
   /verbose, /v           - 切换详细模式
   /skills                - 列出可用技能
   /max-turns <n>         - 设置最大对话轮数
+  /upgrade, /update      - 从 GitHub Releases 升级到最新版本
   /restart, /reboot      - 重启程序
   /shell <command>, /sh  - 执行 shell 命令
 
@@ -414,6 +424,14 @@ func HandleStatus(ctx context.Context, args string) (*CommandResult, error) {
 
 // HandleSetting handles /setting command - actual logic in engine.handleSettingCommand
 func HandleSetting(ctx context.Context, args string) (*CommandResult, error) {
+	// Just acknowledge - engine.handleSlashCommand will do the actual work
+	return &CommandResult{
+		Output: "", // empty output, engine will write logs
+	}, nil
+}
+
+// HandleUpgrade handles /upgrade command - actual logic in engine.handleSlashCommand
+func HandleUpgrade(ctx context.Context, args string) (*CommandResult, error) {
 	// Just acknowledge - engine.handleSlashCommand will do the actual work
 	return &CommandResult{
 		Output: "", // empty output, engine will write logs

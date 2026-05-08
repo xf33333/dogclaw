@@ -33,6 +33,7 @@ import (
 	"dogclaw/pkg/thinking"
 	"dogclaw/pkg/transcript"
 	"dogclaw/pkg/types"
+	"dogclaw/pkg/upgrade"
 	"dogclaw/pkg/usage"
 )
 
@@ -636,6 +637,17 @@ func (qe *QueryEngine) handleSlashCommand(ctx context.Context, input string) err
 		out := qe.handleSettingCommand()
 		qe.lastAssistantText = out
 		qe.logger.Info(out)
+
+	case "upgrade", "update":
+		out, err := qe.handleUpgradeCommand(ctx)
+		if err != nil {
+			errStr := fmt.Sprintf("升级失败: %v", err)
+			qe.lastAssistantText = errStr
+			qe.logger.Error(errStr)
+		} else {
+			qe.lastAssistantText = out
+			qe.logger.Info(out)
+		}
 
 	case "restart":
 		qe.SetNeedsRestart(true)
@@ -1340,6 +1352,32 @@ func (qe *QueryEngine) SetNeedsRestart(needsRestart bool) {
 func getRestartFlagPath() string {
 	// 获取临时目录路径
 	return filepath.Join(os.TempDir(), "dogclaw_restart.flag")
+}
+
+// handleUpgradeCommand handles /upgrade command - downloads the latest version from GitHub
+func (qe *QueryEngine) handleUpgradeCommand(ctx context.Context) (string, error) {
+	result, err := upgrade.Run(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("🔄 版本升级:\n"))
+	sb.WriteString(fmt.Sprintf("  • 当前版本: %s\n", result.CurrentVersion))
+	sb.WriteString(fmt.Sprintf("  • 最新版本: %s\n", result.LatestVersion))
+
+	if result.Upgraded {
+		sb.WriteString(fmt.Sprintf("\n✅ %s\n", result.Message))
+		// 升级成功后，触发重启
+		go func() {
+			time.Sleep(2 * time.Second)
+			qe.SetNeedsRestart(true)
+		}()
+	} else {
+		sb.WriteString(fmt.Sprintf("\nℹ️  %s\n", result.Message))
+	}
+
+	return sb.String(), nil
 }
 
 // handleMCPCommand handles the /mcp command to list all MCP tools and their details

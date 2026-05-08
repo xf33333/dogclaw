@@ -25,6 +25,7 @@ import (
 	"dogclaw/pkg/tools/skilltool"
 	"dogclaw/pkg/transcript"
 	"dogclaw/pkg/types"
+	"dogclaw/pkg/upgrade"
 	"fmt"
 	"os"
 	"os/signal"
@@ -42,6 +43,7 @@ const (
 	ModeAgent   StartupMode = "agent"
 	ModeGateway StartupMode = "gateway"
 	ModeOnboard StartupMode = "onboard"
+	ModeUpgrade StartupMode = "upgrade"
 )
 
 // settingsFileExists checks if the settings.json file exists
@@ -129,6 +131,7 @@ func printUsage() {
 	fmt.Println("  agent       CLI interactive mode for direct communication")
 	fmt.Println("  gateway     Starts all configured channels (QQ, Weixin, etc.)")
 	fmt.Println("  onboard     Interactive setup for models and channels")
+	fmt.Println("  upgrade     Upgrade to the latest version from GitHub Releases")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  dogclaw agent")
@@ -243,8 +246,8 @@ func main() {
 	} else {
 		// Mode specified via command line
 		startupMode = StartupMode(modeArgs[0])
-		if startupMode != ModeAgent && startupMode != ModeGateway && startupMode != ModeOnboard {
-			fmt.Printf("❌ Error: Invalid mode '%s'. Must be 'agent', 'gateway', 'onboard' '\n", modeArgs[0])
+		if startupMode != ModeAgent && startupMode != ModeGateway && startupMode != ModeOnboard && startupMode != ModeUpgrade {
+			fmt.Printf("❌ Error: Invalid mode '%s'. Must be 'agent', 'gateway', 'onboard', 'upgrade' '\n", modeArgs[0])
 			printUsage()
 			os.Exit(1)
 		}
@@ -332,6 +335,35 @@ func main() {
 			os.Exit(1)
 		}
 
+	case ModeUpgrade:
+		setupSignalHandler(nil)
+		fmt.Println("⬆️  Starting in UPGRADE mode...")
+		runUpgrade()
+	}
+}
+
+// runUpgrade checks for and downloads the latest version from GitHub Releases
+func runUpgrade() {
+	ctx := context.Background()
+	result, err := upgrade.Run(ctx)
+	if err != nil {
+		fmt.Printf("❌ 升级失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("当前版本: %s\n", result.CurrentVersion)
+	fmt.Printf("最新版本: %s\n", result.LatestVersion)
+
+	if result.Upgraded {
+		fmt.Printf("✅ %s\n", result.Message)
+		fmt.Println("正在重启...")
+		// 通过创建重启标志文件并退出状态码 12 触发重启
+		restartFlagPath := getRestartFlagPath()
+		os.WriteFile(restartFlagPath, []byte("1"), 0644)
+		time.Sleep(1 * time.Second)
+		os.Exit(12)
+	} else {
+		fmt.Printf("ℹ️  %s\n", result.Message)
 	}
 }
 
