@@ -144,7 +144,7 @@ func (o *Operation) ioloop() {
 
 			o.buf.Refresh(nil)
 			switch r {
-			case CharEnter, CharCtrlJ:
+			case CharEnter:
 				o.history.Update(o.buf.Runes(), false)
 				fallthrough
 			case CharInterrupt:
@@ -239,7 +239,23 @@ func (o *Operation) ioloop() {
 			o.buf.BackEscapeWord()
 		case CharCtrlY:
 			o.buf.Yank()
-		case CharEnter, CharCtrlJ:
+		case CharCtrlJ:
+			// In raw terminal mode, Enter key sends \r (CharEnter=13),
+			// while pasted text contains \n (CharCtrlJ=10).
+			// Treat \n as a content newline (insert into buffer) rather than
+			// as a submit key. This makes multi-line paste work even without
+			// bracketed paste mode support.
+			if o.IsSearchMode() {
+				o.SearchChar('\n')
+				keepInSearchMode = true
+				break
+			}
+			o.buf.WriteRune('\n')
+			if o.IsInCompleteMode() {
+				o.OnComplete()
+				keepInCompleteMode = true
+			}
+		case CharEnter:
 			if o.IsSearchMode() {
 				o.ExitSearchMode(false)
 			}

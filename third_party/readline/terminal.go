@@ -128,6 +128,8 @@ func (t *Terminal) ioloop() {
 		isEscapeSS3    bool
 		expectNextChar bool
 		isPaste        bool // bracketed paste mode active
+		pasteBuf       []rune // buffer for collecting paste escape sequence
+		inPasteEsc     bool // currently reading an escape sequence inside paste
 	)
 
 	buf := bufio.NewReader(t.getStdin())
@@ -151,6 +153,76 @@ func (t *Terminal) ioloop() {
 			break
 		}
 
+		// In bracketed paste mode, we need to detect the end sequence \033[201~
+		// while passing all other characters (including \n) as content.
+		// We must NOT interpret escape sequences inside pasted text as special keys.
+		if isPaste {
+			if inPasteEsc {
+				// We're reading an escape sequence inside paste
+				pasteBuf = append(pasteBuf, r)
+
+				// After ESC, expect '[' for CSI sequence
+				if len(pasteBuf) == 2 && r == '[' {
+					// Start of CSI sequence, keep reading parameters
+					continue
+				}
+
+				// CSI parameter bytes (0x30-0x3F: digits, ;, etc.) - keep reading
+				if r >= 0x30 && r <= 0x3F {
+					continue
+				}
+				// CSI intermediate bytes (0x20-0x2F) - keep reading
+				if r >= 0x20 && r <= 0x2F {
+					continue
+				}
+
+				// Final byte (0x40-0x7E) - sequence is complete
+				if r == '~' && len(pasteBuf) >= 4 {
+					// Check for \033[201~ (end of bracketed paste)
+					numStr := string(pasteBuf[2 : len(pasteBuf)-1]) // skip ESC, [, and ~
+					if numStr == "201" {
+						// End of bracketed paste
+						isPaste = false
+						inPasteEsc = false
+						pasteBuf = pasteBuf[:0]
+						expectNextChar = true
+						continue
+					}
+				}
+
+				// Not the end sequence; flush buffered escape chars as content
+				for _, pr := range pasteBuf {
+					if pr == '\n' {
+						t.outchan <- MetaPasteNewline
+					} else {
+						t.outchan <- pr
+					}
+				}
+				pasteBuf = pasteBuf[:0]
+				inPasteEsc = false
+				expectNextChar = true
+				continue
+			}
+
+			// Check if this is the start of the end-paste sequence \033[201~
+			if r == CharEsc {
+				inPasteEsc = true
+				pasteBuf = append(pasteBuf[:0], r)
+				expectNextChar = true
+				continue
+			}
+
+			// In paste mode, pass characters as content
+			// Both \n and \r are treated as newlines in pasted text
+			if r == '\n' || r == '\r' {
+				t.outchan <- MetaPasteNewline
+			} else {
+				t.outchan <- r
+			}
+			expectNextChar = true
+			continue
+		}
+
 		if isEscape {
 			isEscape = false
 			if r == CharEscapeEx {
@@ -169,7 +241,6 @@ func (t *Terminal) ioloop() {
 			isEscapeEx = false
 			if key := readEscKey(r, buf); key != nil {
 				// Detect bracketed paste start: \033[200~
-				// and bracketed paste end: \033[201~
 				if key.typ == '~' {
 					switch key.attr {
 					case "200":
@@ -177,7 +248,7 @@ func (t *Terminal) ioloop() {
 						expectNextChar = true
 						continue
 					case "201":
-						isPaste = false
+						// End of paste without start - ignore
 						expectNextChar = true
 						continue
 					}
@@ -220,14 +291,8 @@ func (t *Terminal) ioloop() {
 			}
 			isEscape = true
 		case CharCtrlJ:
-			if isPaste {
-				// During bracketed paste, treat newline as a regular character
-				// rather than as a submit/enter key
-				t.outchan <- MetaPasteNewline
-			} else {
-				expectNextChar = false
-				t.outchan <- r
-			}
+			expectNextChar = false
+			t.outchan <- r
 		case CharInterrupt, CharEnter, CharDelete:
 			expectNextChar = false
 			fallthrough
