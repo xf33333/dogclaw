@@ -291,7 +291,17 @@ func (t *Terminal) ioloop() {
 			}
 			isEscape = true
 		case CharCtrlJ:
-			expectNextChar = false
+			// Keep expectNextChar=true so that terminal ioloop continues
+			// reading from stdin after a \n. This is critical for multi-line
+			// paste: when the user pastes text containing newlines, the stdin
+			// buffer has many characters queued up. If we set expectNextChar=false
+			// here, the ioloop would stop and wait for KickRead(), but nobody
+			// will call KickRead() until the current Readline() call returns
+			// (which requires the user to press Enter). The operation ioloop
+			// would then block on t.ReadRune() indefinitely — a deadlock.
+			// With bracketed paste mode, newlines are handled as MetaPasteNewline
+			// (expectNextChar stays true), so this only affects terminals without
+			// bracketed paste support or when that mode doesn't activate.
 			t.outchan <- r
 		case CharInterrupt, CharEnter, CharDelete:
 			expectNextChar = false
