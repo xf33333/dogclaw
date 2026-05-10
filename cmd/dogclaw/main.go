@@ -282,6 +282,23 @@ func main() {
 	config.SetWorkingDir(cwd)
 	fmt.Printf("📍 Working directory: %s\n", cwd)
 
+	// If mode is onboard, run it immediately without checking API key first
+	if startupMode == ModeOnboard {
+		setupSignalHandler(nil)
+		fmt.Println("🚀 Starting in ONBOARD mode (setup)...")
+		// Load or create settings
+		settings, err := config.LoadSettings()
+		if err != nil {
+			fmt.Printf("⚠️  Failed to load settings, using defaults: %v\n", err)
+			settings = config.DefaultSettings()
+		}
+		if err := commands.RunOnboard(context.Background(), settings); err != nil {
+			fmt.Printf("❌ Onboarding failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	// Load persistent settings
 	settings, err := config.LoadSettings()
 	if err != nil {
@@ -327,14 +344,6 @@ func main() {
 		setupSignalHandler(stopChan)
 		fmt.Println("🌐 Starting in GATEWAY mode (channel communication)...")
 		runGateway(cfg, settings, stopChan, multiProjectMode)
-	case ModeOnboard:
-		setupSignalHandler(nil)
-		fmt.Println("🚀 Starting in ONBOARD mode (setup)...")
-		if err := commands.RunOnboard(context.Background(), settings); err != nil {
-			fmt.Printf("❌ Onboarding failed: %v\n", err)
-			os.Exit(1)
-		}
-
 	case ModeUpgrade:
 		setupSignalHandler(nil)
 		fmt.Println("⬆️  Starting in UPGRADE mode...")
