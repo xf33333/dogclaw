@@ -473,14 +473,16 @@ func runAgent(cfg *config.Config, settings *config.Settings, multiProjectMode bo
 			break // EOF or error
 		}
 
-		input = strings.TrimSpace(input)
-		if input == "" {
+		// 不做任何修剪，直接使用原始输入
+		// 只有当输入是空行时才继续下一次循环
+		if len(input) == 0 {
 			continue
 		}
 
 		// Handle exit commands natively
-		if slash.IsSlashCommand(input) {
-			cmd, _ := slash.ParseCommand(input)
+		trimmedInput := strings.TrimSpace(input)
+		if slash.IsSlashCommand(trimmedInput) {
+			cmd, _ := slash.ParseCommand(trimmedInput)
 			if cmd == "exit" || cmd == "quit" || cmd == "q" {
 				// Stop heartbeat manager before exit
 				if hbManager != nil {

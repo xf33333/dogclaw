@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/chzyer/readline"
 )
@@ -43,13 +42,14 @@ func New(cfg *Config) (*Manager, error) {
 	}
 
 	rl, err := readline.NewEx(&readline.Config{
-		Prompt:          cfg.Prompt,
-		HistoryFile:     cfg.HistoryFile,
-		HistoryLimit:    1000,
-		InterruptPrompt: "^C",
-		EOFPrompt:       "exit",
-		// Enable Ctrl+R for reverse search
+		Prompt:                 cfg.Prompt,
+		HistoryFile:            cfg.HistoryFile,
+		HistoryLimit:           1000,
+		InterruptPrompt:        "^C",
+		EOFPrompt:              "exit",
 		DisableAutoSaveHistory: false,
+		// 确保唯一编辑行模式是关闭的，这样粘贴的换行符会被正确处理
+		UniqueEditLine: false,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create readline: %w", err)
@@ -67,12 +67,10 @@ func New(cfg *Config) (*Manager, error) {
 //   - Ctrl+A/E: move to beginning/end of line
 //   - Ctrl+L: clear screen
 //   - Tab: autocomplete (if configured)
+//   - Supports multi-line input by using bracketed paste mode
 func (m *Manager) ReadLine() (string, error) {
-	line, err := m.rl.Readline()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(line), nil
+	// 直接读取，不做额外的处理，避免破坏 readline 库本身对粘贴的支持
+	return m.rl.Readline()
 }
 
 // SetPrompt updates the prompt string
