@@ -4,10 +4,22 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 )
+
+var debugPaste = os.Getenv("READLINE_DEBUG") != ""
+
+func pasteLog(format string, args ...interface{}) {
+	if !debugPaste {
+		return
+	}
+	f, _ := os.OpenFile("/tmp/paste_debug.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	fmt.Fprintf(f, format+"\n", args...)
+	f.Close()
+}
 
 type Terminal struct {
 	m         sync.Mutex
@@ -30,7 +42,7 @@ func NewTerminal(cfg *Config) (*Terminal, error) {
 	t := &Terminal{
 		cfg:      cfg,
 		kickChan: make(chan struct{}, 1),
-		outchan:  make(chan rune),
+		outchan:  make(chan rune, 64), // Buffered to allow burst writes during paste
 		stopChan: make(chan struct{}, 1),
 		sizeChan: make(chan string, 1),
 	}
@@ -115,6 +127,19 @@ func (t *Terminal) KickRead() {
 	}
 }
 
+// kickSelf wakes up the ioloop to continue reading in paste mode
+// This is needed because the ioloop blocks waiting for kickChan after
+// sending characters to outchan. In paste mode, we need to continue
+// reading without waiting for the operation to process each character.
+func (t *Terminal) kickSelf() {
+	// Try to kick without blocking - if kickChan is full, the ioloop
+	// is already awake and will continue on its own
+	select {
+	case t.kickChan <- struct{}{}:
+	default:
+	}
+}
+
 func (t *Terminal) ioloop() {
 	t.wg.Add(1)
 	defer func() {
@@ -127,19 +152,22 @@ func (t *Terminal) ioloop() {
 		isEscapeEx     bool
 		isEscapeSS3    bool
 		expectNextChar bool
-		isPaste        bool // bracketed paste mode active
+		isPaste        bool   // bracketed paste mode active
 		pasteBuf       []rune // buffer for collecting paste escape sequence
-		inPasteEsc     bool // currently reading an escape sequence inside paste
+		inPasteEsc     bool   // currently reading an escape sequence inside paste
 	)
 
 	buf := bufio.NewReader(t.getStdin())
 	for {
 		if !expectNextChar {
 			atomic.StoreInt32(&t.isReading, 0)
+			pasteLog("[ioloop] waiting on kickChan/stopChan")
 			select {
 			case <-t.kickChan:
 				atomic.StoreInt32(&t.isReading, 1)
+				pasteLog("[ioloop] kicked, isReading=1")
 			case <-t.stopChan:
+				pasteLog("[ioloop] stopChan received, returning")
 				return
 			}
 		}
@@ -152,73 +180,92 @@ func (t *Terminal) ioloop() {
 			}
 			break
 		}
+		pasteLog("[ioloop] read r=%d(%c) isPaste=%v isEscape=%v isEscapeEx=%v", r, r, isPaste, isEscape, isEscapeEx)
 
 		// In bracketed paste mode, we need to detect the end sequence \033[201~
 		// while passing all other characters (including \n) as content.
 		// We must NOT interpret escape sequences inside pasted text as special keys.
 		if isPaste {
-			if inPasteEsc {
-				// We're reading an escape sequence inside paste
-				pasteBuf = append(pasteBuf, r)
-
-				// After ESC, expect '[' for CSI sequence
-				if len(pasteBuf) == 2 && r == '[' {
-					// Start of CSI sequence, keep reading parameters
+			if !inPasteEsc {
+				// Normal paste mode: pass chars, look for escape to start CSI
+				if r == '\x1b' {
+					// Start of potential CSI sequence
+					pasteBuf = append(pasteBuf[:0], r)
+					inPasteEsc = true
+					expectNextChar = true
 					continue
 				}
+				// Pass through as content
+				if r == '\n' || r == '\r' {
+					t.outchan <- MetaPasteNewline
+				} else {
+					t.outchan <- r
+				}
+				// In paste mode, kick ourselves to continue reading
+				// without waiting for the operation to process each char
+				t.kickSelf()
+				expectNextChar = true
+				continue
+			}
 
-				// CSI parameter bytes (0x30-0x3F: digits, ;, etc.) - keep reading
-				if r >= 0x30 && r <= 0x3F {
+			// inPasteEsc: collecting CSI sequence after \x1b
+			pasteBuf = append(pasteBuf, r)
+
+			if len(pasteBuf) == 1 && r == '\x1b' {
+				// Just saw another ESC, continue
+				continue
+			}
+			if len(pasteBuf) == 2 {
+				if r == '[' {
+					// Good, saw \x1b[, continue collecting
 					continue
 				}
-				// CSI intermediate bytes (0x20-0x2F) - keep reading
-				if r >= 0x20 && r <= 0x2F {
-					continue
+				// Not \x1b[, flush and continue as normal char
+				for _, pr := range pasteBuf[:len(pasteBuf)-1] {
+					t.outchan <- pr
 				}
+				pasteBuf = nil
+				inPasteEsc = false
+				// r is already read, handle it as normal
+				if r == '\n' || r == '\r' {
+					t.outchan <- MetaPasteNewline
+				} else {
+					t.outchan <- r
+				}
+				t.kickSelf()
+				expectNextChar = true
+				continue
+			}
 
-				// Final byte (0x40-0x7E) - sequence is complete
-				if r == '~' && len(pasteBuf) >= 4 {
-					// Check for \033[201~ (end of bracketed paste)
-					numStr := string(pasteBuf[2 : len(pasteBuf)-1]) // skip ESC, [, and ~
+			// len(pasteBuf) >= 3: collecting CSI parameters
+			// CSI params are digits and semicolons (0x30-0x3F)
+			if r >= 0x30 && r <= 0x3F {
+				continue
+			}
+
+			// End of CSI: look for '~' (0x7E)
+			if r == '~' {
+				// Check if this is \x1b[201~ (end paste)
+				if len(pasteBuf) >= 4 && pasteBuf[0] == '\x1b' && pasteBuf[1] == '[' {
+					numStr := string(pasteBuf[2 : len(pasteBuf)-1])
 					if numStr == "201" {
-						// End of bracketed paste
+						// End of bracketed paste!
 						isPaste = false
 						inPasteEsc = false
-						pasteBuf = pasteBuf[:0]
+						pasteBuf = nil
 						expectNextChar = true
 						continue
 					}
 				}
-
-				// Not the end sequence; flush buffered escape chars as content
-				for _, pr := range pasteBuf {
-					if pr == '\n' {
-						t.outchan <- MetaPasteNewline
-					} else {
-						t.outchan <- pr
-					}
-				}
-				pasteBuf = pasteBuf[:0]
-				inPasteEsc = false
-				expectNextChar = true
-				continue
 			}
 
-			// Check if this is the start of the end-paste sequence \033[201~
-			if r == CharEsc {
-				inPasteEsc = true
-				pasteBuf = append(pasteBuf[:0], r)
-				expectNextChar = true
-				continue
+			// Not the end sequence, flush and handle as normal char
+			for _, pr := range pasteBuf {
+				t.outchan <- pr
 			}
-
-			// In paste mode, pass characters as content
-			// Both \n and \r are treated as newlines in pasted text
-			if r == '\n' || r == '\r' {
-				t.outchan <- MetaPasteNewline
-			} else {
-				t.outchan <- r
-			}
+			pasteBuf = nil
+			inPasteEsc = false
+			t.kickSelf()
 			expectNextChar = true
 			continue
 		}

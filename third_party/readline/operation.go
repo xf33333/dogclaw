@@ -2,9 +2,22 @@ package readline
 
 import (
 	"errors"
+	"fmt"
 	"io"
+	"os"
 	"sync"
 )
+
+var debugOp = os.Getenv("READLINE_DEBUG") != ""
+
+func opLog(format string, args ...interface{}) {
+	if !debugOp {
+		return
+	}
+	f, _ := os.OpenFile("/tmp/op_debug.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	fmt.Fprintf(f, format+"\n", args...)
+	f.Close()
+}
 
 var (
 	ErrInterrupt = errors.New("Interrupt")
@@ -105,10 +118,13 @@ func (o *Operation) GetConfig() *Config {
 }
 
 func (o *Operation) ioloop() {
+	opLog("[ioloop] started")
 	for {
+		opLog("[ioloop] about to call ReadRune")
 		keepInSearchMode := false
 		keepInCompleteMode := false
 		r := o.t.ReadRune()
+		opLog("[ioloop] received r=%d(%c)", r, r)
 
 		if o.GetConfig().FuncFilterInputRune != nil {
 			var process bool
@@ -400,15 +416,10 @@ func (o *Operation) String() (string, error) {
 
 func (o *Operation) Runes() ([]rune, error) {
 	o.t.EnterRawMode()
+
 	// Enable bracketed paste mode so we can distinguish pasted text
 	// from typed characters (especially newlines)
 	o.w.Write([]byte("\x1b[?2004h"))
-
-	defer func() {
-		// Disable bracketed paste mode before exiting raw mode
-		o.w.Write([]byte("\x1b[?2004l"))
-		o.t.ExitRawMode()
-	}()
 
 	listener := o.GetConfig().Listener
 	if listener != nil {
@@ -417,15 +428,24 @@ func (o *Operation) Runes() ([]rune, error) {
 
 	o.buf.Refresh(nil) // print prompt
 	o.t.KickRead()
+
+	var result []rune
+	var err error
+
 	select {
-	case r := <-o.outchan:
-		return r, nil
-	case err := <-o.errchan:
+	case result = <-o.outchan:
+	case err = <-o.errchan:
 		if e, ok := err.(*InterruptError); ok {
 			return e.Line, ErrInterrupt
 		}
-		return nil, err
 	}
+
+	// IMPORTANT: Must call ExitRawMode BEFORE returning, otherwise
+	// defer's Write would block in wrapWriter.Write -> buf.Refresh
+	// because IsReading() is still true at that point.
+	o.t.ExitRawMode()
+
+	return result, err
 }
 
 func (o *Operation) PasswordEx(prompt string, l Listener) ([]byte, error) {

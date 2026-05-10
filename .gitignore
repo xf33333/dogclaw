@@ -8,3 +8,4 @@ bin
 .dogclaw.args
 .dogclaw.env
 nohup.out
+setting.json

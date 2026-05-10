@@ -1,6 +1,8 @@
 module example/agent_loader
 
-go 1.23.2
+go 1.24.0
+
+toolchain go1.24.9
 
 require dogclaw v0.1.0
 
