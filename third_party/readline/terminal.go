@@ -329,32 +329,45 @@ func (t *Terminal) ioloop() {
 			}
 		}
 
+		// Check for paste: if we see '\r' and we can peek the next character without blocking, treat as paste
+		hasMoreChars := false
+		if r == CharEnter {
+			// Peek to see if there are more characters available
+			if _, err := buf.Peek(1); err == nil {
+				hasMoreChars = true
+			}
+		}
+
 		expectNextChar = true
-		switch r {
-		case CharEsc:
+		switch {
+		case r == CharEsc:
 			if t.cfg.VimMode {
 				t.outchan <- r
 				break
 			}
 			isEscape = true
-		case CharCtrlJ:
-			// Keep expectNextChar=true so that terminal ioloop continues
-			// reading from stdin after a \n. This is critical for multi-line
-			// paste: when the user pastes text containing newlines, the stdin
-			// buffer has many characters queued up. If we set expectNextChar=false
-			// here, the ioloop would stop and wait for KickRead(), but nobody
-			// will call KickRead() until the current Readline() call returns
-			// (which requires the user to press Enter). The operation ioloop
-			// would then block on t.ReadRune() indefinitely — a deadlock.
-			// With bracketed paste mode, newlines are handled as MetaPasteNewline
-			// (expectNextChar stays true), so this only affects terminals without
-			// bracketed paste support or when that mode doesn't activate.
-			t.outchan <- r
-		case CharInterrupt, CharEnter, CharDelete:
-			expectNextChar = false
+		case r == CharCtrlJ || (r == CharEnter && hasMoreChars):
+			// Treat \n and \r (with more characters) as content newlines
+			if hasMoreChars {
+				// This is part of a paste, not a user pressing Enter
+				t.outchan <- MetaPasteNewline
+			} else {
+				t.outchan <- r
+			}
+		case r == CharInterrupt || r == CharEnter || r == CharDelete:
+			// Only set expectNextChar=false when it's user pressing Enter (not paste)
+			if r == CharEnter && hasMoreChars {
+				// Paste, don't set expectNextChar=false
+			} else {
+				expectNextChar = false
+			}
 			fallthrough
 		default:
-			t.outchan <- r
+			if r == CharEnter && hasMoreChars {
+				// Already handled above, skip default
+			} else {
+				t.outchan <- r
+			}
 		}
 	}
 
