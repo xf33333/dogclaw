@@ -459,7 +459,9 @@ func runAgent(cfg *config.Config, settings *config.Settings, multiProjectMode bo
 
 	// ToolCallCallback: prints a brief notification when a tool is called
 	qe.ToolCallCallback = func(toolName, summary string) {
-		tm.Printf("🔧 %s\n", summary)
+		// 支持 Markdown 格式渲染
+		rendered := mdrender.Render("🔧 " + summary)
+		tm.Write([]byte(rendered + "\n"))
 	}
 
 	// ResumeCallback: output resumed conversation history with Markdown rendering
