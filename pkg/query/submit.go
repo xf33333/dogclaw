@@ -1427,7 +1427,8 @@ func (qe *QueryEngine) buildFullSystemPrompt() (string, *api.MemorySummary) {
 	//if sysCtx.GitStatus != "" {
 	//	parts = append(parts, "## Git Status\n\n"+sysCtx.GitStatus)
 	//}
-	parts = append(parts, sysCtx.CurrentDate)
+	dateAndDir := fmt.Sprintf("%s Current working directory is %s.", sysCtx.CurrentDate, sysCtx.WorkingDir)
+	parts = append(parts, dateAndDir)
 
 	return strings.Join(parts, "\n\n"), summary
 }

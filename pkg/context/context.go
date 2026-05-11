@@ -2,6 +2,7 @@ package context
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -15,6 +16,7 @@ const maxStatusChars = 2000
 type SystemContext struct {
 	//GitStatus    string
 	CurrentDate  string
+	WorkingDir   string
 	CacheBreaker string
 }
 
@@ -33,9 +35,11 @@ var (
 
 func GetSystemContext() *SystemContext {
 	systemContextOnce.Do(func() {
+		wd, _ := os.Getwd()
 		systemContextVal = &SystemContext{
 			//GitStatus:   getGitStatus(),
 			CurrentDate: getCurrentDate(),
+			WorkingDir:  wd,
 		}
 	})
 	return systemContextVal
@@ -185,8 +189,9 @@ func BuildFullSystemPrompt(baseSystemPrompt string, claudeMdContent string) stri
 	//	parts = append(parts, "## Git Status\n\n"+sysCtx.GitStatus)
 	//}
 
-	// Current date
-	parts = append(parts, sysCtx.CurrentDate)
+	// Current date and working directory
+	dateAndDir := fmt.Sprintf("%s Current working directory is %s.", sysCtx.CurrentDate, sysCtx.WorkingDir)
+	parts = append(parts, dateAndDir)
 
 	// User context (AGENT.md)
 	if claudeMdContent != "" {
