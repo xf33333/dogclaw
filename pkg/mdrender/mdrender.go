@@ -6,10 +6,16 @@ package mdrender
 
 import (
 	"os"
+	"sync"
+
+	"github.com/charmbracelet/glamour"
 )
 
 var (
-	forceRender bool // when true, always render regardless of TTY check
+	renderer     *glamour.TermRenderer
+	rendererOnce sync.Once
+	rendererErr  error
+	forceRender  bool // when true, always render regardless of TTY check
 )
 
 // EnableForceRender enables rendering even when stdout is not detected as a TTY.
@@ -18,10 +24,64 @@ func EnableForceRender() {
 	forceRender = true
 }
 
+// getRenderer returns a cached glamour renderer instance.
+// It disables background color detection to fix macOS zsh escape code issues.
+func getRenderer() (*glamour.TermRenderer, error) {
+	rendererOnce.Do(func() {
+		// Force set GLAMOUR_STYLE to dark before initializing to prevent
+		// background color detection issues on macOS zsh
+		originalGlamourStyle := os.Getenv("GLAMOUR_STYLE")
+		os.Setenv("GLAMOUR_STYLE", "dark")
+		defer func() {
+			if originalGlamourStyle != "" {
+				os.Setenv("GLAMOUR_STYLE", originalGlamourStyle)
+			} else {
+				os.Unsetenv("GLAMOUR_STYLE")
+			}
+		}()
+
+		// Detect terminal width for word wrapping
+		width := getTerminalWidth()
+
+		// Explicitly use "dark" style and disable background color detection
+		// to prevent issues like "1;rgb:fae0/fae0/fae0" on macOS zsh
+		r, err := glamour.NewTermRenderer(
+			glamour.WithStandardStyle("dark"),
+			glamour.WithWordWrap(width),
+		)
+		if err != nil {
+			// Fallback to no style at all
+			r, err = glamour.NewTermRenderer(
+				glamour.WithWordWrap(width),
+			)
+			if err != nil {
+				rendererErr = err
+				return
+			}
+		}
+		renderer = r
+	})
+	return renderer, rendererErr
+}
+
 // Render converts Markdown text to ANSI-formatted terminal output.
-// For now, it just returns the text as-is to avoid escape code issues.
 func Render(text string) string {
-	return text
+	// Skip rendering if not a terminal and force is not enabled
+	if !forceRender && !isTerminal() {
+		return text
+	}
+
+	r, err := getRenderer()
+	if err != nil {
+		return text
+	}
+
+	rendered, err := r.Render(text)
+	if err != nil {
+		return text
+	}
+
+	return rendered
 }
 
 // isTerminal checks if stdout is a terminal (TTY).
