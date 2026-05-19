@@ -25,28 +25,44 @@ func EnableForceRender() {
 }
 
 // getRenderer returns a cached glamour renderer instance.
-// It disables background color detection to fix macOS zsh escape code issues.
 func getRenderer() (*glamour.TermRenderer, error) {
 	rendererOnce.Do(func() {
-		// Force set GLAMOUR_STYLE to dark before initializing to prevent
-		// background color detection issues on macOS zsh
-		originalGlamourStyle := os.Getenv("GLAMOUR_STYLE")
-		os.Setenv("GLAMOUR_STYLE", "dark")
-		defer func() {
-			if originalGlamourStyle != "" {
-				os.Setenv("GLAMOUR_STYLE", originalGlamourStyle)
-			} else {
-				os.Unsetenv("GLAMOUR_STYLE")
-			}
-		}()
-
 		// Detect terminal width for word wrapping
 		width := getTerminalWidth()
 
-		// Explicitly use "dark" style and disable background color detection
-		// to prevent issues like "1;rgb:fae0/fae0/fae0" on macOS zsh
+		// Determine the style to use
+		styleName := "dark"
+		if envStyle := os.Getenv("GLAMOUR_STYLE"); envStyle != "" {
+			styleName = envStyle
+		} else if isLightTerminal() {
+			styleName = "light"
+		}
+
+		// Critical fix: temporarily unset COLORTERM and TERM_PROGRAM
+		// to prevent glamour from trying to query the terminal background color,
+		// which causes the "1;rgb:fae0/fae0/fae0" issue on macOS zsh
+		originalColorterm := os.Getenv("COLORTERM")
+		originalTermProgram := os.Getenv("TERM_PROGRAM")
+		originalTermProgramVersion := os.Getenv("TERM_PROGRAM_VERSION")
+		os.Unsetenv("COLORTERM")
+		os.Unsetenv("TERM_PROGRAM")
+		os.Unsetenv("TERM_PROGRAM_VERSION")
+
+		defer func() {
+			// Restore original env vars after renderer is created
+			if originalColorterm != "" {
+				os.Setenv("COLORTERM", originalColorterm)
+			}
+			if originalTermProgram != "" {
+				os.Setenv("TERM_PROGRAM", originalTermProgram)
+			}
+			if originalTermProgramVersion != "" {
+				os.Setenv("TERM_PROGRAM_VERSION", originalTermProgramVersion)
+			}
+		}()
+
 		r, err := glamour.NewTermRenderer(
-			glamour.WithStandardStyle("dark"),
+			glamour.WithStandardStyle(styleName),
 			glamour.WithWordWrap(width),
 		)
 		if err != nil {
@@ -94,7 +110,7 @@ func isTerminal() bool {
 }
 
 // isLightTerminal checks if the terminal has a light background
-// by inspecting environment variables.
+// by inspecting environment variables (but does NOT query the terminal directly!).
 func isLightTerminal() bool {
 	// Check for explicit color scheme setting
 	colorterm := os.Getenv("COLORTERM")
