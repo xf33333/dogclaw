@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/charmbracelet/glamour"
+	"github.com/muesli/termenv"
 )
 
 var (
@@ -30,12 +31,17 @@ func getRenderer() (*glamour.TermRenderer, error) {
 		// Detect terminal width for word wrapping
 		width := getTerminalWidth()
 
-		// Determine the style to use
+		// Determine the style to use - use termenv for SAFE background color detection!
 		styleName := "dark"
 		if envStyle := os.Getenv("GLAMOUR_STYLE"); envStyle != "" {
 			styleName = envStyle
-		} else if isLightTerminal() {
-			styleName = "light"
+		} else {
+			// Use termenv's safe background color detection
+			if termenv.HasDarkBackground() {
+				styleName = "dark"
+			} else {
+				styleName = "light"
+			}
 		}
 
 		// Critical fix: temporarily unset COLORTERM and TERM_PROGRAM
@@ -107,30 +113,6 @@ func isTerminal() bool {
 		return false
 	}
 	return (fi.Mode() & os.ModeCharDevice) != 0
-}
-
-// isLightTerminal checks if the terminal has a light background
-// by inspecting environment variables (but does NOT query the terminal directly!).
-func isLightTerminal() bool {
-	// Check for explicit color scheme setting
-	colorterm := os.Getenv("COLORTERM")
-	if colorterm == "light" || colorterm == "Light" {
-		return true
-	}
-
-	// Some terminals set COLORSCHEME
-	colorscheme := os.Getenv("COLORSCHEME")
-	if colorscheme == "light" || colorscheme == "Light" {
-		return true
-	}
-
-	// Check GLAMOUR_STYLE environment variable (glamour's built-in)
-	glamourStyle := os.Getenv("GLAMOUR_STYLE")
-	if glamourStyle == "light" {
-		return true
-	}
-
-	return false
 }
 
 // getTerminalWidth returns the terminal width for word wrapping.
